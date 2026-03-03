@@ -22,6 +22,13 @@ export const useTabsStore = defineStore('tabs', () => {
     () => loadingTabId.value !== null && loadingTabId.value === activeTabId.value,
   )
 
+  // 人机混合接管：true 表示已暂停 AI，用户可手动操作右侧网页，完成后「继续 AI」
+  const aiPaused = ref(false)
+  function setAiPaused(value: boolean) {
+    aiPaused.value = value
+    // 接通 OpenClaw 后在此通知 sidecar 暂停/继续
+  }
+
   function scheduleShowWebview(label: string) {
     if (loadingTimer) clearTimeout(loadingTimer)
     loadingTabId.value = label
@@ -95,6 +102,8 @@ export const useTabsStore = defineStore('tabs', () => {
     loadingTabId,
     isHome,
     isWebviewLoading,
+    aiPaused,
+    setAiPaused,
     openTab,
     switchTab,
     switchToHome,

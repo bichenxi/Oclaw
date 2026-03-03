@@ -46,7 +46,7 @@
 *   [x] **分屏 UI 改造**：左侧 320px AI 控制台（`AIConsole.vue`），右侧 Webview 区域；`calc_webview_rect` 已按 `LEFT_PANEL_WIDTH` 计算，窗口 resize 时调用 `resize_all_webviews`。
 *   [ ] **指令解析与可视化流**：解析 OpenClaw 输出的思考链 (Thought) 和动作 (Action)，在左侧面板流式渲染。（UI 已就绪：`AIConsole` 内 `streamItems` 占位，接通 OpenClaw 后推送即可。）
 *   [x] **视觉高亮 (Action Highlighting)**：左侧控制台提供「高亮测试」输入框，可对当前 tab 内任意选择器执行红框高亮（`eval_in_webview` → `__clawBridge.highlight`）。AI 指令驱动下的「先高亮再执行」在接通 OpenClaw 后接入。
-*   [ ] **人机混合接管 (Hybrid Control)**：增加全局快捷键或面板开关，允许用户随时暂停 AI，自己在右侧 Webview 中完成操作（如拖动滑块验证码），随后通知 AI “状态已更新，继续”。
+*   [x] **人机混合接管 (Hybrid Control)**：左侧控制台提供「暂停 AI（手动接管）」按钮，切换后显示「继续 AI」及提示文案；状态存于 `tabs.aiPaused`，接通 OpenClaw 后在此处通知 sidecar 暂停/继续即可。
 
 ### 阶段 2：AI 专属增强 - “提效与降本”
 *目标：提升 OpenClaw 的执行成功率，降低大模型的 Token 消耗。*

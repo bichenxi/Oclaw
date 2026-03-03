@@ -50,6 +50,19 @@ async function runHighlight() {
       <span class="ai-console-sub">思考链 · 工具调用</span>
     </div>
     <div class="ai-console-body">
+      <div class="ai-console-takeover">
+        <button
+          type="button"
+          class="takeover-btn"
+          :class="{ active: store.aiPaused }"
+          @click="store.setAiPaused(!store.aiPaused)"
+        >
+          {{ store.aiPaused ? '继续 AI' : '暂停 AI（手动接管）' }}
+        </button>
+        <p v-if="store.aiPaused" class="takeover-hint">
+          你正在手动操作右侧网页，完成验证码等操作后点击「继续 AI」。
+        </p>
+      </div>
       <div class="ai-console-stream">
         <div
           v-for="(item, i) in streamItems"
@@ -117,6 +130,41 @@ async function runHighlight() {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.ai-console-takeover {
+  flex-shrink: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e8e2f4;
+}
+
+.takeover-btn {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #5f47ce;
+  background: rgba(95, 71, 206, 0.08);
+  border: 1px solid rgba(95, 71, 206, 0.25);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.takeover-btn:hover {
+  background: rgba(95, 71, 206, 0.12);
+}
+
+.takeover-btn.active {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.takeover-hint {
+  font-size: 12px;
+  color: #8a80a7;
+  margin: 8px 0 0 0;
+  line-height: 1.4;
 }
 
 .ai-console-stream {
