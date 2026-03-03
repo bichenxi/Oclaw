@@ -1,4 +1,5 @@
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, WebviewUrl};
+use base64::Engine;
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl};
 use tauri_plugin_shell::ShellExt;
 
 // 44px 为前端 TabBar 高度；macOS 下子 webview 的 y 可能相对整窗（含标题栏），多留余量避免遮挡
@@ -66,8 +67,12 @@ async fn create_tab_webview(app: AppHandle, label: String, url: String) -> Resul
         label
     );
 
+    let app_emit = app.clone();
     let nav_handler = move |nav_url: &url::Url| {
-        if nav_url.scheme() == "claw" && nav_url.host_str() == Some("webview-click") {
+        if nav_url.scheme() != "claw" {
+            return true;
+        }
+        if nav_url.host_str() == Some("webview-click") {
             let mut label_val = String::new();
             let mut x_val = 0i32;
             let mut y_val = 0i32;
@@ -85,7 +90,20 @@ async fn create_tab_webview(app: AppHandle, label: String, url: String) -> Resul
                 "Webview '{}' clicked at ({}, {}) on {}",
                 label_val, x_val, y_val, tag_val
             );
-            return false; // 拦截导航，不真正跳转
+            return false;
+        }
+        if nav_url.host_str() == Some("dom-snapshot") {
+            if let Some(frag) = nav_url.fragment() {
+                let b64 = frag.replace('-', "+").replace('_', "/");
+                if let Ok(decoded) =
+                    base64::engine::general_purpose::STANDARD.decode(b64.as_bytes())
+                {
+                    if let Ok(s) = String::from_utf8(decoded) {
+                        let _ = app_emit.emit("dom-snapshot", &s);
+                    }
+                }
+            }
+            return false;
         }
         true
     };
@@ -158,6 +176,27 @@ async fn eval_in_webview(app: AppHandle, label: String, script: String) -> Resul
     Ok(())
 }
 
+#[tauri::command]
+async fn get_dom_snapshot(app: AppHandle, label: String) -> Result<(), String> {
+    let wv = app
+        .get_webview(&label)
+        .ok_or(format!("webview '{}' not found", label))?;
+
+    // 用主框架 location 触发 claw://，由 on_navigation 拦截并 cancel，避免 iframe 的 frame-src 与 HTTP 的 Mixed Content
+    // 数据放 fragment，长度限制约 1.5e6 字符以防 URL 超长
+    let script = r#"
+(function(){
+  var data = window.__clawBridge && window.__clawBridge.getSimplifiedDOM ? window.__clawBridge.getSimplifiedDOM() : [];
+  var json = JSON.stringify(data);
+  if (json.length > 1500000) json = json.slice(0, 1500000) + ']';
+  var b64 = btoa(unescape(encodeURIComponent(json))).replace(/\+/g, '-').replace(/\//g, '_');
+  window.location.assign('claw://dom-snapshot#' + b64);
+})();
+"#;
+    wv.eval(script).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -168,6 +207,7 @@ pub fn run() {
             test_sidecar,
             on_webview_click,
             eval_in_webview,
+            get_dom_snapshot,
             create_tab_webview,
             show_webview,
             hide_webview,

@@ -51,9 +51,7 @@
 ### 阶段 2：AI 专属增强 - “提效与降本”
 *目标：提升 OpenClaw 的执行成功率，降低大模型的 Token 消耗。*
 
-*   [ ] **智能 DOM 提纯 (DOM Pre-processor)**：
-    *   在注入的 `bridge.js` 或 Rust 代理层中，过滤掉无用的 `<script>`、`<style>` 和广告节点。
-    *   提取关键的交互元素（a, button, input）及其坐标，生成精简的 JSON 或 Markdown 发送给 OpenClaw。
+*   [x] **智能 DOM 提纯 (DOM Pre-processor)**：在 `bridge.js` 中实现 `getSimplifiedDOM()`，提取 `a, button, input, select, textarea, [role=button], [onclick]`，输出 `{ tag, selector, text, rect }` 数组（最多 80 项）；通过 `claw://dom-snapshot#base64` 回传 Rust，由 `dom-snapshot` 事件送至前端展示。左侧控制台提供「获取 DOM 快照」按钮，接通 OpenClaw 后可把该 JSON 直接作为上下文下发。
 *   [ ] **操作录制与回放 (Session Recording)**：
     *   记录 AI 的操作轨迹（URL、动作、简要状态）。
     *   实现“时光倒流”功能：任务失败时，重置 Webview 并按脚本自动回放至失败前的一步，允许用户修改 prompt 重新尝试。

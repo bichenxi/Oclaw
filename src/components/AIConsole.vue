@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { useTabsStore } from '@/stores/tabs'
 
 const store = useTabsStore()
 const highlightSelector = ref('')
 const highlightError = ref('')
+const domSnapshot = ref<string | null>(null)
+const domSnapshotLoading = ref(false)
 
 // 占位：后续由 OpenClaw 流式推送
 const streamItems = ref<{ type: 'thought' | 'tool'; text: string }[]>([
@@ -41,6 +44,30 @@ async function runHighlight() {
     highlightError.value = String(e)
   }
 }
+
+async function fetchDomSnapshot() {
+  const label = store.activeTabId
+  if (!label) {
+    domSnapshot.value = null
+    return
+  }
+  domSnapshotLoading.value = true
+  domSnapshot.value = null
+  try {
+    await invoke('get_dom_snapshot', { label })
+    // 结果通过 dom-snapshot 事件异步回传，由 listen 写入 domSnapshot
+  } catch (e) {
+    domSnapshot.value = '获取失败: ' + String(e)
+  } finally {
+    domSnapshotLoading.value = false
+  }
+}
+
+onMounted(() => {
+  listen<string>('dom-snapshot', (e) => {
+    domSnapshot.value = e.payload
+  })
+})
 </script>
 
 <template>
@@ -72,6 +99,20 @@ async function runHighlight() {
         >
           <span class="stream-tag">{{ item.type === 'thought' ? 'Thought' : 'Tool' }}</span>
           <span class="stream-text">{{ item.text }}</span>
+        </div>
+      </div>
+      <div class="ai-console-domsnapshot">
+        <label class="snapshot-label">DOM 提纯（可交互元素快照）</label>
+        <button
+          type="button"
+          class="snapshot-btn"
+          :disabled="!store.activeTabId || domSnapshotLoading"
+          @click="fetchDomSnapshot"
+        >
+          {{ domSnapshotLoading ? '获取中…' : '获取 DOM 快照' }}
+        </button>
+        <div v-if="domSnapshot" class="snapshot-output">
+          <pre>{{ domSnapshot }}</pre>
         </div>
       </div>
       <div class="ai-console-highlight">
@@ -200,6 +241,54 @@ async function runHighlight() {
 .stream-text {
   color: #1f1f2e;
   line-height: 1.4;
+}
+
+.ai-console-domsnapshot {
+  flex-shrink: 0;
+}
+
+.snapshot-label {
+  font-size: 12px;
+  color: #8a80a7;
+  display: block;
+  margin-bottom: 6px;
+}
+
+.snapshot-btn {
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #5f47ce;
+  background: rgba(95, 71, 206, 0.08);
+  border: 1px solid rgba(95, 71, 206, 0.2);
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.snapshot-btn:hover:not(:disabled) {
+  background: rgba(95, 71, 206, 0.12);
+}
+
+.snapshot-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.snapshot-output {
+  max-height: 160px;
+  overflow: auto;
+  font-size: 11px;
+  background: #1f1f2e;
+  color: #e8e2f4;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.snapshot-output pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .ai-console-highlight {
