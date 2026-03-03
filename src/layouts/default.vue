@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import TabBar from '@/components/TabBar.vue'
+import AIConsole from '@/components/AIConsole.vue'
 import { useTabsStore } from '@/stores/tabs'
 
 const store = useTabsStore()
@@ -8,15 +9,21 @@ const store = useTabsStore()
 <template>
   <div class="layout">
     <TabBar />
-    <div class="layout-content">
-      <RouterView v-show="store.isHome" />
-      <!-- webview 加载期间在内容区显示动画（webview 创建时先隐藏，延迟后再 show） -->
-      <Transition name="fade">
-        <div v-if="!store.isHome && store.isWebviewLoading" class="webview-loading">
-          <div class="webview-loading-spinner" />
-          <span class="webview-loading-text">加载中...</span>
-        </div>
-      </Transition>
+    <div class="layout-body">
+      <!-- 阶段 1 分屏：有网页 tab 时显示左侧 AI 控制台 -->
+      <aside v-show="!store.isHome" class="layout-sidebar">
+        <AIConsole />
+      </aside>
+      <div class="layout-content">
+        <RouterView v-show="store.isHome" />
+        <!-- webview 加载期间在内容区显示动画 -->
+        <Transition name="fade">
+          <div v-if="!store.isHome && store.isWebviewLoading" class="webview-loading">
+            <div class="webview-loading-spinner" />
+            <span class="webview-loading-text">加载中...</span>
+          </div>
+        </Transition>
+      </div>
     </div>
   </div>
 </template>
@@ -29,9 +36,24 @@ const store = useTabsStore()
   overflow: hidden;
 }
 
+.layout-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.layout-sidebar {
+  width: 320px;
+  flex-shrink: 0;
+  min-width: 0;
+  height: 100%;
+}
+
 .layout-content {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   position: relative;
 }
 

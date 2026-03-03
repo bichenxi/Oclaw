@@ -26,6 +26,16 @@
     "core:window:allow-set-size",
     "core:window:allow-center",
     "core:window:allow-show",
-    "core:window:allow-inner-size"
+    "core:window:allow-inner-size",
+    "shell:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "bin/openclaw",
+          "sidecar": true
+        }
+      ]
+    }
   ]
 }

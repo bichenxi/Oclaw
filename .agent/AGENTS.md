@@ -1,10 +1,10 @@
-# OpenClaw Auntie Browser — Agent 说明
+# Claw Browser — Agent 说明
 
-本仓库为 **OpenClaw 配套专属浏览器** 的工程，采用干净骨架，便于在此基础上扩展与 OpenClaw 相关的浏览器能力。
+本仓库为 **Claw Browser** 的工程，与 OpenClaw 结合使用，采用干净骨架，便于在此基础上扩展与 OpenClaw 相关的浏览器能力。
 
 ## 角色与目标
 
-- **项目定位**：为 OpenClaw 提供专属桌面浏览器壳（Tauri + Vue），不承载原业务逻辑，仅保留可运行的最小框架。
+- **项目定位**：为与 OpenClaw 配合提供桌面浏览器壳（Tauri + Vue），不承载原业务逻辑，仅保留可运行的最小框架。
 - **协作方式**：在实现新功能、修 bug 或重构时，优先遵循本仓库约定与 `.agent/skills/` 下技能说明。
 
 ## 技术栈

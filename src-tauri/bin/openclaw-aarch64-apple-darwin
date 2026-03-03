@@ -1,0 +1,5 @@
+#!/bin/bash
+echo "OpenClaw Mock Sidecar Started"
+while read line; do
+  echo "ACK: $line"
+done

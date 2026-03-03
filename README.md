@@ -1,6 +1,6 @@
-# OpenClaw Auntie Browser
+# Claw Browser
 
-为 **OpenClaw** 配套的专属桌面浏览器，基于 Tauri 2 + Vue 3 的干净骨架，便于扩展与 OpenClaw 相关的浏览器能力。
+与 **OpenClaw** 结合使用的桌面浏览器，基于 Tauri 2 + Vue 3 的干净骨架，便于扩展与 OpenClaw 相关的浏览器能力。
 
 ## 技术栈
 

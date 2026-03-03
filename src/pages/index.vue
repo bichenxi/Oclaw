@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import { invoke } from '@tauri-apps/api/core'
 import { useTabsStore } from '@/stores/tabs'
 
 const store = useTabsStore()
 const urlInput = ref('')
 const isInputFocused = ref(false)
+const sidecarResult = ref<string | null>(null)
+const sidecarLoading = ref(false)
 
 const SEARCH_ENGINE_URL = 'https://www.google.com/search'
 
@@ -41,6 +44,19 @@ async function go() {
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter') go()
 }
+
+async function testSidecar() {
+  sidecarLoading.value = true
+  sidecarResult.value = null
+  try {
+    const res = await invoke<string>('test_sidecar')
+    sidecarResult.value = res ?? 'OK'
+  } catch (e) {
+    sidecarResult.value = String(e)
+  } finally {
+    sidecarLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -53,7 +69,7 @@ function handleKeydown(e: KeyboardEvent) {
           <div class="brand-diamond" />
         </div>
         <div class="brand-text">
-          <span class="brand-name">OpenClaw</span>
+          <span class="brand-name">Claw Browser</span>
           <span class="brand-sub">你 的 专 属 浏 览 器</span>
         </div>
       </div>
@@ -73,6 +89,21 @@ function handleKeydown(e: KeyboardEvent) {
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
         </button>
+      </div>
+
+      <!-- 阶段 0 PoC：Sidecar 联通测试 -->
+      <div class="phase0-test">
+        <button
+          type="button"
+          class="phase0-btn"
+          :disabled="sidecarLoading"
+          @click="testSidecar"
+        >
+          {{ sidecarLoading ? '测试中…' : '阶段 0：测试 Sidecar' }}
+        </button>
+        <p v-if="sidecarResult" class="phase0-result" :class="{ error: sidecarResult.startsWith('Error') }">
+          {{ sidecarResult }}
+        </p>
       </div>
     </div>
   </div>
@@ -206,5 +237,45 @@ function handleKeydown(e: KeyboardEvent) {
 
 .search-btn:active {
   transform: scale(0.92);
+}
+
+.phase0-test {
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.phase0-btn {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: #9b8ec4;
+  background: rgba(95, 71, 206, 0.08);
+  border: 1px solid rgba(95, 71, 206, 0.2);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.phase0-btn:hover:not(:disabled) {
+  color: #5f47ce;
+  background: rgba(95, 71, 206, 0.12);
+}
+
+.phase0-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.phase0-result {
+  font-size: 12px;
+  color: #5f47ce;
+  max-width: 360px;
+  word-break: break-all;
+}
+
+.phase0-result.error {
+  color: #ef4444;
 }
 </style>

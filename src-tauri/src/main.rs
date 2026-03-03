@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    openclaw_browser_lib::run()
+    claw_browser_lib::run()
 }

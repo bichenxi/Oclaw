@@ -1,13 +1,13 @@
 ---
-name: openclaw-browser
-description: OpenClaw 专属浏览器项目开发约定与 Tauri/Vue 扩展方式。在为本仓库添加功能、调用 Tauri 命令、改路由或状态时使用。
+name: claw-browser
+description: Claw Browser 项目开发约定与 Tauri/Vue 扩展方式。在为本仓库添加功能、调用 Tauri 命令、改路由或状态时使用。
 ---
 
-# OpenClaw Auntie Browser 开发技能
+# Claw Browser 开发技能
 
 ## 项目身份
 
-- 仓库：OpenClaw 配套专属浏览器，干净骨架，无历史业务逻辑。
+- 仓库：Claw Browser，与 OpenClaw 结合使用的桌面浏览器，干净骨架，无历史业务逻辑。
 - 栈：Tauri 2 + Vue 3 + TypeScript + Vite + Pinia + UnoCSS + Element Plus。
 
 ## 前端约定
