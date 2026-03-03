@@ -1,19 +1,29 @@
 <script setup lang="ts">
-import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useTabsStore } from '@/stores/tabs'
+import { useRecordingStore } from '@/stores/recording'
+import type { RecordingStep } from '@/stores/recording'
+import { evalInWebview, getDomSnapshot } from '@/api/webview'
+import { simulateStream } from '@/api/app'
 
 const store = useTabsStore()
+const recordingStore = useRecordingStore()
+const replaying = ref(false)
 const highlightSelector = ref('')
 const highlightError = ref('')
 const domSnapshot = ref<string | null>(null)
 const domSnapshotLoading = ref(false)
 
-// 占位：后续由 OpenClaw 流式推送
+// 由 OpenClaw / stream-item 事件流式推送；初始为占位提示
 const streamItems = ref<{ type: 'thought' | 'tool'; text: string }[]>([
   { type: 'thought', text: '（接通 OpenClaw 后，思考链将在此流式显示）' },
   { type: 'tool', text: '（工具调用与执行结果将在此显示）' },
 ])
+const isPlaceholder = (items: { type: string; text: string }[]) =>
+  items.length === 2 &&
+  items[0].text.includes('接通 OpenClaw') &&
+  items[1].text.includes('工具调用与执行结果')
+const streamSimulating = ref(false)
 
 async function runHighlight() {
   const sel = highlightSelector.value.trim()
@@ -39,7 +49,7 @@ async function runHighlight() {
     setTimeout(function(){ if(wrap.parentNode) wrap.parentNode.removeChild(wrap); }, 2500);
   })();`
   try {
-    await invoke('eval_in_webview', { label, script })
+    await evalInWebview(label, script)
   } catch (e) {
     highlightError.value = String(e)
   }
@@ -54,7 +64,7 @@ async function fetchDomSnapshot() {
   domSnapshotLoading.value = true
   domSnapshot.value = null
   try {
-    await invoke('get_dom_snapshot', { label })
+    await getDomSnapshot(label)
     // 结果通过 dom-snapshot 事件异步回传，由 listen 写入 domSnapshot
   } catch (e) {
     domSnapshot.value = '获取失败: ' + String(e)
@@ -63,9 +73,45 @@ async function fetchDomSnapshot() {
   }
 }
 
+function stepSummary(step: RecordingStep): string {
+  if (step.type === 'navigate') return step.url
+  const s = step.script.slice(0, 50)
+  return (s.length < step.script.length ? s + '…' : s) || 'eval'
+}
+
+async function replayToStepIndex(index: number) {
+  const label = store.activeTabId
+  if (!label) return
+  replaying.value = true
+  try {
+    await recordingStore.replayToStep(label, index)
+  } finally {
+    replaying.value = false
+  }
+}
+
+async function runSimulateStream() {
+  streamSimulating.value = true
+  try {
+    await simulateStream()
+  } finally {
+    streamSimulating.value = false
+  }
+}
+
 onMounted(() => {
   listen<string>('dom-snapshot', (e) => {
     domSnapshot.value = e.payload
+  })
+  listen<{ type: string; text: string }>('stream-item', (e) => {
+    const payload = e.payload
+    if (!payload?.type || !payload?.text) return
+    const type = payload.type === 'tool' ? 'tool' : 'thought'
+    if (isPlaceholder(streamItems.value)) {
+      streamItems.value = [{ type, text: payload.text }]
+    } else {
+      streamItems.value.push({ type, text: payload.text })
+    }
   })
 })
 </script>
@@ -91,6 +137,17 @@ onMounted(() => {
         </p>
       </div>
       <div class="ai-console-stream">
+        <div class="stream-header-row">
+          <span class="stream-label">思考链 · 工具调用</span>
+          <button
+            type="button"
+            class="stream-simulate-btn"
+            :disabled="streamSimulating"
+            @click="runSimulateStream"
+          >
+            {{ streamSimulating ? '模拟中…' : '模拟流式输出' }}
+          </button>
+        </div>
         <div
           v-for="(item, i) in streamItems"
           :key="i"
@@ -100,6 +157,39 @@ onMounted(() => {
           <span class="stream-tag">{{ item.type === 'thought' ? 'Thought' : 'Tool' }}</span>
           <span class="stream-text">{{ item.text }}</span>
         </div>
+      </div>
+      <div class="ai-console-recording">
+        <label class="recording-label">操作录制</label>
+        <div v-if="recordingStore.steps.length === 0" class="recording-empty">
+          打开网页或执行操作后将在此记录步骤
+        </div>
+        <ul v-else class="recording-list">
+          <li
+            v-for="(step, i) in recordingStore.steps"
+            :key="i"
+            class="recording-item"
+          >
+            <span class="recording-step-num">{{ i + 1 }}</span>
+            <span class="recording-step-type">{{ step.type }}</span>
+            <span class="recording-step-summary">{{ stepSummary(step) }}</span>
+            <button
+              type="button"
+              class="recording-replay-btn"
+              :disabled="replaying || !store.activeTabId"
+              @click="replayToStepIndex(i)"
+            >
+              回放到此步
+            </button>
+          </li>
+        </ul>
+        <button
+          v-if="recordingStore.steps.length > 0"
+          type="button"
+          class="recording-clear-btn"
+          @click="recordingStore.clearSteps()"
+        >
+          清空录制
+        </button>
       </div>
       <div class="ai-console-domsnapshot">
         <label class="snapshot-label">DOM 提纯（可交互元素快照）</label>
@@ -214,6 +304,38 @@ onMounted(() => {
   gap: 8px;
 }
 
+.stream-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.stream-label {
+  font-size: 11px;
+  color: #8a80a7;
+}
+
+.stream-simulate-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #5f47ce;
+  background: rgba(95, 71, 206, 0.08);
+  border: 1px solid rgba(95, 71, 206, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.stream-simulate-btn:hover:not(:disabled) {
+  background: rgba(95, 71, 206, 0.14);
+}
+
+.stream-simulate-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .stream-item {
   font-size: 12px;
   padding: 8px 10px;
@@ -241,6 +363,102 @@ onMounted(() => {
 .stream-text {
   color: #1f1f2e;
   line-height: 1.4;
+}
+
+.ai-console-recording {
+  flex-shrink: 0;
+}
+
+.recording-label {
+  font-size: 12px;
+  color: #8a80a7;
+  display: block;
+  margin-bottom: 6px;
+}
+
+.recording-empty {
+  font-size: 12px;
+  color: #9b8ec4;
+  padding: 8px 0;
+}
+
+.recording-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.recording-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  background: rgba(95, 71, 206, 0.05);
+  border: 1px solid rgba(95, 71, 206, 0.1);
+}
+
+.recording-step-num {
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+  color: #5f47ce;
+  font-weight: 600;
+}
+
+.recording-step-type {
+  flex-shrink: 0;
+  color: #8a80a7;
+  text-transform: uppercase;
+}
+
+.recording-step-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1f1f2e;
+}
+
+.recording-replay-btn {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  font-size: 10px;
+  color: #5f47ce;
+  background: rgba(95, 71, 206, 0.1);
+  border: 1px solid rgba(95, 71, 206, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.recording-replay-btn:hover:not(:disabled) {
+  background: rgba(95, 71, 206, 0.18);
+}
+
+.recording-replay-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.recording-clear-btn {
+  margin-top: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #8a80a7;
+  background: transparent;
+  border: 1px solid #e8e2f4;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.recording-clear-btn:hover {
+  color: #5f47ce;
+  border-color: rgba(95, 71, 206, 0.3);
 }
 
 .ai-console-domsnapshot {

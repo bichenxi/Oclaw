@@ -44,7 +44,7 @@
 *目标：搭建沉浸式 UI，让用户能直观看到 AI 的工作流。*
 
 *   [x] **分屏 UI 改造**：左侧 320px AI 控制台（`AIConsole.vue`），右侧 Webview 区域；`calc_webview_rect` 已按 `LEFT_PANEL_WIDTH` 计算，窗口 resize 时调用 `resize_all_webviews`。
-*   [ ] **指令解析与可视化流**：解析 OpenClaw 输出的思考链 (Thought) 和动作 (Action)，在左侧面板流式渲染。（UI 已就绪：`AIConsole` 内 `streamItems` 占位，接通 OpenClaw 后推送即可。）
+*   [x] **指令解析与可视化流**：解析 OpenClaw 输出的思考链 (Thought) 和动作 (Action)，在左侧面板流式渲染。Rust 提供 `emit_stream_item(type, text)` 与 `simulate_stream()`，前端监听 `stream-item` 事件并追加到 `streamItems`；控制台提供「模拟流式输出」按钮可验证链路。接通真实 OpenClaw 后只需在 Sidecar 解析 stdout 并调用 `emit_stream_item` 即可。
 *   [x] **视觉高亮 (Action Highlighting)**：左侧控制台提供「高亮测试」输入框，可对当前 tab 内任意选择器执行红框高亮（`eval_in_webview` → `__clawBridge.highlight`）。AI 指令驱动下的「先高亮再执行」在接通 OpenClaw 后接入。
 *   [x] **人机混合接管 (Hybrid Control)**：左侧控制台提供「暂停 AI（手动接管）」按钮，切换后显示「继续 AI」及提示文案；状态存于 `tabs.aiPaused`，接通 OpenClaw 后在此处通知 sidecar 暂停/继续即可。
 
@@ -52,11 +52,11 @@
 *目标：提升 OpenClaw 的执行成功率，降低大模型的 Token 消耗。*
 
 *   [x] **智能 DOM 提纯 (DOM Pre-processor)**：在 `bridge.js` 中实现 `getSimplifiedDOM()`，提取 `a, button, input, select, textarea, [role=button], [onclick]`，输出 `{ tag, selector, text, rect }` 数组（最多 80 项）；通过 `claw://dom-snapshot#base64` 回传 Rust，由 `dom-snapshot` 事件送至前端展示。左侧控制台提供「获取 DOM 快照」按钮，接通 OpenClaw 后可把该 JSON 直接作为上下文下发。
-*   [ ] **操作录制与回放 (Session Recording)**：
-    *   记录 AI 的操作轨迹（URL、动作、简要状态）。
-    *   实现“时光倒流”功能：任务失败时，重置 Webview 并按脚本自动回放至失败前的一步，允许用户修改 prompt 重新尝试。
-*   [ ] **多身份隔离 (Sandbox Profiles)**：
-    *   为不同的任务设定独立的 Tauri 数据目录。实现“工作环境”与“个人环境”的 Cookie、LocalStorage 物理隔离，防止账号串车。
+*   [x] **操作录制与回放 (Session Recording)**：
+    *   记录打开网页的导航步骤（`openTab` 时 push `navigate`）；录制 store 支持 `eval` 步骤，便于后续接入 AI 动作。
+    *   左侧控制台「操作录制」列表展示步骤，支持「回放到此步」（在当前 tab 内依次执行 navigate/eval）与「清空录制」。
+*   [x] **多身份隔离 (Sandbox Profiles)**：
+    *   为不同的任务设定独立的 Tauri 数据目录。实现“工作环境”与“个人环境”的 Cookie、LocalStorage 物理隔离，当前 profile 持久化于 app_data_dir/current_profile；Webview 使用 profiles/name 作为 data_directory，实现 Cookie/LocalStorage 按身份隔离。预设：默认/工作/个人，顶部栏切换时关闭所有 tab、清空录制。
 
 ### 阶段 3：安全与隐私中心 - “构建护城河”
 *目标：将风险降到最低，打造企业级/重度用户的信任基础。*

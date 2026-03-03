@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
-import { invoke } from '@tauri-apps/api/core'
+import * as webviewApi from '@/api/webview'
+import { useRecordingStore } from '@/stores/recording'
 
 const WEBVIEW_LOADING_DELAY_MS = 1200
 
@@ -35,7 +36,7 @@ export const useTabsStore = defineStore('tabs', () => {
     loadingTimer = setTimeout(() => {
       loadingTimer = null
       loadingTabId.value = null
-      invoke('show_webview', { label }).catch(() => {})
+      webviewApi.showWebview(label).catch(() => {})
     }, WEBVIEW_LOADING_DELAY_MS)
   }
 
@@ -44,12 +45,13 @@ export const useTabsStore = defineStore('tabs', () => {
     const id = `tab-${Date.now()}-${tabIndex}`
     const title = url.replace(/^https?:\/\//, '').split('/')[0]
 
-    await invoke('create_tab_webview', { label: id, url })
+    await webviewApi.createTabWebview(id, url)
+    useRecordingStore().pushStep({ type: 'navigate', url })
 
     tabs.value.push({ id, label: id, url, title })
 
     if (activeTabId.value) {
-      await invoke('hide_webview', { label: activeTabId.value }).catch(() => {})
+      await webviewApi.hideWebview(activeTabId.value).catch(() => {})
     }
     activeTabId.value = id
     scheduleShowWebview(id)
@@ -59,16 +61,16 @@ export const useTabsStore = defineStore('tabs', () => {
     if (id === activeTabId.value) return
 
     if (activeTabId.value) {
-      await invoke('hide_webview', { label: activeTabId.value }).catch(() => {})
+      await webviewApi.hideWebview(activeTabId.value).catch(() => {})
     }
 
     activeTabId.value = id
-    await invoke('show_webview', { label: id }).catch(() => {})
+    await webviewApi.showWebview(id).catch(() => {})
   }
 
   async function switchToHome() {
     if (activeTabId.value) {
-      await invoke('hide_webview', { label: activeTabId.value }).catch(() => {})
+      await webviewApi.hideWebview(activeTabId.value).catch(() => {})
     }
     activeTabId.value = null
   }
@@ -77,7 +79,7 @@ export const useTabsStore = defineStore('tabs', () => {
     const idx = tabs.value.findIndex((t) => t.id === id)
     if (idx === -1) return
 
-    await invoke('close_webview', { label: id }).catch(() => {})
+    await webviewApi.closeWebview(id).catch(() => {})
     tabs.value.splice(idx, 1)
 
     if (activeTabId.value === id) {
@@ -93,7 +95,7 @@ export const useTabsStore = defineStore('tabs', () => {
   async function resizeAllWebviews() {
     const labels = tabs.value.map((t) => t.label)
     if (labels.length === 0) return
-    await invoke('resize_all_webviews', { labels }).catch(() => {})
+    await webviewApi.resizeAllWebviews(labels).catch(() => {})
   }
 
   return {
