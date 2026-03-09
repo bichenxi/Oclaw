@@ -33,10 +33,6 @@
       "identifier": "shell:allow-execute",
       "allow": [
         {
-          "name": "bin/openclaw",
-          "sidecar": true
-        },
-        {
           "name": "node",
           "sidecar": false
         }
