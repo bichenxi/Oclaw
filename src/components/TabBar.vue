@@ -5,31 +5,36 @@ const store = useTabsStore()
 </script>
 
 <template>
-  <div class="tab-bar">
+  <!-- tab-bar: -webkit-app-region:drag 无法原子化，保留在 style -->
+  <div class="tab-bar flex items-stretch h-11 bg-[#f5f2fc] border-b border-[#e8e2f4] px-2 gap-0.5 overflow-x-auto overflow-y-hidden shrink-0">
     <!-- 首页 Tab -->
     <div
-      class="tab-item home-tab"
-      :class="{ active: store.isHome }"
+      class="tab-item flex items-center gap-1.5 px-3 min-w-auto rounded-t-lg cursor-pointer transition text-[#8a80a7] text-[13px] whitespace-nowrap relative mt-1.5"
+      :class="store.isHome
+        ? 'bg-white text-secondary shadow-[0_-1px_4px_rgba(95,71,206,0.06)]'
+        : 'hover:bg-secondary/6 hover:text-secondary'"
       @click="store.switchToHome()"
     >
-      <svg class="tab-home-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <svg class="shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
         <polyline points="9 22 9 12 15 12 15 22" />
       </svg>
-      <span class="tab-title">主页</span>
+      <span class="overflow-hidden text-ellipsis whitespace-nowrap leading-none">主页</span>
     </div>
 
     <!-- 网页 Tabs -->
     <div
       v-for="tab in store.tabs"
       :key="tab.id"
-      class="tab-item"
-      :class="{ active: store.activeTabId === tab.id }"
+      class="tab-item flex items-center gap-1.5 px-3.5 min-w-[60px] max-w-[200px] rounded-t-lg cursor-pointer transition text-[#8a80a7] text-[13px] whitespace-nowrap relative mt-1.5"
+      :class="store.activeTabId === tab.id && store.specialView === null
+        ? 'bg-white text-secondary shadow-[0_-1px_4px_rgba(95,71,206,0.06)]'
+        : 'hover:bg-secondary/6 hover:text-secondary'"
       @click="store.switchTab(tab.id)"
     >
-      <span class="tab-title">{{ tab.title }}</span>
+      <span class="overflow-hidden text-ellipsis whitespace-nowrap leading-none">{{ tab.title }}</span>
       <button
-        class="tab-close"
+        class="flex items-center justify-center w-[18px] h-[18px] rounded-[4px] border-none bg-transparent text-[#b8b0cc] cursor-pointer shrink-0 transition p-0 hover:bg-[rgba(239,68,68,0.12)] hover:text-accent"
         @click.stop="store.closeTab(tab.id)"
       >
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
@@ -39,23 +44,41 @@ const store = useTabsStore()
       </button>
     </div>
 
-    <!-- 占位 -->
-    <div class="tab-spacer" />
+    <!-- 占位（可拖拽区域） -->
+    <div class="tab-spacer flex-1 min-w-[40px]" />
+
+    <!-- OpenClaw 按钮 -->
+    <div
+      class="tab-item flex items-center gap-[5px] px-3 min-w-auto rounded-t-lg cursor-pointer transition text-[#8a80a7] text-[13px] whitespace-nowrap relative mt-1.5"
+      :class="store.specialView === 'openclaw'
+        ? 'bg-[rgba(124,92,252,0.12)] text-[#7c5cfc]'
+        : 'hover:bg-secondary/6 hover:text-secondary'"
+      @click="store.switchToSpecialView('openclaw')"
+    >
+      <img class="w-[18px] h-[18px] rounded-[5px] object-cover shrink-0" src="/logo.jpg" alt="logo" />
+      <span class="overflow-hidden text-ellipsis whitespace-nowrap leading-none">OpenClaw</span>
+    </div>
+
+    <!-- 设置按钮 -->
+    <div
+      class="tab-item flex items-center gap-[5px] px-3 min-w-auto rounded-t-lg cursor-pointer transition text-[#8a80a7] text-[13px] whitespace-nowrap relative mt-1.5"
+      :class="store.specialView === 'settings'
+        ? 'bg-secondary/10 text-secondary'
+        : 'hover:bg-secondary/6 hover:text-secondary'"
+      @click="store.switchToSpecialView('settings')"
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+      <span class="overflow-hidden text-ellipsis whitespace-nowrap leading-none">设置</span>
+    </div>
   </div>
 </template>
 
 <style scoped>
+/* -webkit-app-region 无法用 UnoCSS 原子类表达，保留此处 */
 .tab-bar {
-  display: flex;
-  align-items: stretch;
-  height: 44px;
-  background: #f5f2fc;
-  border-bottom: 1px solid #e8e2f4;
-  padding: 0 8px;
-  gap: 2px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  flex-shrink: 0;
   -webkit-app-region: drag;
 }
 
@@ -64,74 +87,10 @@ const store = useTabsStore()
 }
 
 .tab-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 14px;
-  min-width: 60px;
-  max-width: 200px;
-  border-radius: 8px 8px 0 0;
-  cursor: pointer;
-  transition: all 0.15s;
-  color: #8a80a7;
-  font-size: 13px;
-  white-space: nowrap;
-  position: relative;
   -webkit-app-region: no-drag;
-  margin-top: 6px;
-}
-
-.tab-item:hover {
-  background: rgba(95, 71, 206, 0.06);
-  color: #5f47ce;
-}
-
-.tab-item.active {
-  background: #ffffff;
-  color: #5f47ce;
-  box-shadow: 0 -1px 4px rgba(95, 71, 206, 0.06);
-}
-
-.home-tab {
-  min-width: auto;
-  padding: 0 12px;
-}
-
-.tab-home-icon {
-  flex-shrink: 0;
-}
-
-.tab-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1;
-}
-
-.tab-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  border: none;
-  background: none;
-  color: #b8b0cc;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: all 0.15s;
-  padding: 0;
-}
-
-.tab-close:hover {
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
 }
 
 .tab-spacer {
-  flex: 1;
-  min-width: 40px;
   -webkit-app-region: drag;
 }
 </style>

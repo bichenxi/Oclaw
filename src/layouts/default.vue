@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import TabBar from '@/components/TabBar.vue'
-import AIConsole from '@/components/AIConsole.vue'
+import OpenclawPage from '@/components/OpenclawPage.vue'
+import SettingsPage from '@/components/SettingsPage.vue'
 import { useTabsStore } from '@/stores/tabs'
 import { useProfileStore } from '@/stores/profile'
 import { PROFILE_OPTIONS } from '@/stores/profile'
@@ -31,16 +32,19 @@ const profileLabels: Record<string, string> = {
 </script>
 
 <template>
-  <div class="layout">
-    <div class="layout-profile-row">
-      <span class="profile-label">身份</span>
-      <div class="profile-btns">
+  <div class="flex flex-col h-screen overflow-hidden">
+    <!-- 身份行 -->
+    <div class="shrink-0 flex items-center gap-2.5 px-3 py-1.5 bg-[#faf8ff] border-b border-[#e8e2f4]">
+      <span class="text-[12px] text-[#8a80a7]">身份</span>
+      <div class="flex gap-1">
         <button
           v-for="name in PROFILE_OPTIONS"
           :key="name"
           type="button"
-          class="profile-btn"
-          :class="{ active: profileStore.currentProfile === name }"
+          class="px-2.5 py-1 text-[12px] bg-transparent border border-[#e8e2f4] rounded-[6px] cursor-pointer transition"
+          :class="profileStore.currentProfile === name
+            ? 'text-secondary border-secondary/40 bg-secondary/10'
+            : 'text-[#8a80a7] hover:text-secondary hover:border-secondary/30 hover:bg-secondary/6'"
           :disabled="profileSwitching"
           @click="selectProfile(name)"
         >
@@ -48,114 +52,28 @@ const profileLabels: Record<string, string> = {
         </button>
       </div>
     </div>
+
     <TabBar />
-    <div class="layout-body">
-      <!-- 阶段 1 分屏：有网页 tab 时显示左侧 AI 控制台 -->
-      <aside v-show="!store.isHome" class="layout-sidebar">
-        <AIConsole />
-      </aside>
-      <div class="layout-content">
-        <RouterView v-show="store.isHome" />
-        <!-- webview 加载期间在内容区显示动画 -->
-        <Transition name="fade">
-          <div v-if="!store.isHome && store.isWebviewLoading" class="webview-loading">
-            <div class="webview-loading-spinner" />
-            <span class="webview-loading-text">加载中...</span>
-          </div>
-        </Transition>
-      </div>
+
+    <!-- 内容区 -->
+    <div class="flex-1 min-h-0 overflow-hidden relative">
+      <OpenclawPage v-if="store.specialView === 'openclaw'" />
+      <SettingsPage v-else-if="store.specialView === 'settings'" />
+      <RouterView v-else-if="store.isHome" />
+      <Transition v-else name="fade">
+        <div
+          v-if="store.isWebviewLoading"
+          class="absolute inset-0 bg-[linear-gradient(180deg,#f8f6ff_0%,#f3eeff_100%)] flex flex-col items-center justify-center gap-4"
+        >
+          <div class="webview-loading-spinner" />
+          <span class="text-[13px] text-[#9b8ec4]">加载中...</span>
+        </div>
+      </Transition>
     </div>
   </div>
 </template>
 
 <style scoped>
-.layout {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  overflow: hidden;
-}
-
-.layout-profile-row {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 12px;
-  background: #faf8ff;
-  border-bottom: 1px solid #e8e2f4;
-}
-
-.profile-label {
-  font-size: 12px;
-  color: #8a80a7;
-}
-
-.profile-btns {
-  display: flex;
-  gap: 4px;
-}
-
-.profile-btn {
-  padding: 4px 10px;
-  font-size: 12px;
-  color: #8a80a7;
-  background: transparent;
-  border: 1px solid #e8e2f4;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.profile-btn:hover:not(:disabled) {
-  color: #5f47ce;
-  border-color: rgba(95, 71, 206, 0.3);
-  background: rgba(95, 71, 206, 0.06);
-}
-
-.profile-btn.active {
-  color: #5f47ce;
-  border-color: rgba(95, 71, 206, 0.4);
-  background: rgba(95, 71, 206, 0.1);
-}
-
-.profile-btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.layout-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
-}
-
-.layout-sidebar {
-  width: 320px;
-  flex-shrink: 0;
-  min-width: 0;
-  height: 100%;
-}
-
-.layout-content {
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-  position: relative;
-}
-
-.webview-loading {
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg, #f8f6ff 0%, #f3eeff 100%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-}
-
 .webview-loading-spinner {
   width: 40px;
   height: 40px;
@@ -163,11 +81,6 @@ const profileLabels: Record<string, string> = {
   border-top-color: #5f47ce;
   border-radius: 50%;
   animation: webview-spin 0.85s linear infinite;
-}
-
-.webview-loading-text {
-  font-size: 13px;
-  color: #9b8ec4;
 }
 
 @keyframes webview-spin {

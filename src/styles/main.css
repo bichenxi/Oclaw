@@ -14,3 +14,12 @@ body,
     outline: none;
   }
 }
+
+/* 去掉 WebKit 原生 appearance，避免按钮/输入框底部边框因 3D 斜角显得更重 */
+button,
+input,
+textarea,
+select {
+  -webkit-appearance: none;
+  appearance: none;
+}

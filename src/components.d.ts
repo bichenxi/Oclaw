@@ -9,8 +9,10 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     AIConsole: typeof import('./components/AIConsole.vue')['default']
+    OpenclawPage: typeof import('./components/OpenclawPage.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    SettingsPage: typeof import('./components/SettingsPage.vue')['default']
     TabBar: typeof import('./components/TabBar.vue')['default']
   }
 }

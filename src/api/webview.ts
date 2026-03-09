@@ -27,3 +27,8 @@ export async function evalInWebview(label: string, script: string): Promise<void
 export async function getDomSnapshot(label: string): Promise<void> {
   await invoke('get_dom_snapshot', { label })
 }
+
+/** 同步当前活动 tab 给 Rust，供 18790 HTTP API 使用；null 表示在首页 */
+export async function setActiveTabLabel(label: string | null): Promise<void> {
+  await invoke('set_active_tab_label', { label })
+}

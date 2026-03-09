@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(file /Users/smzdm/code-data/shiyan/openclaw-auntie-browser/public/logo.jpg && identify /Users/smzdm/code-data/shiyan/openclaw-auntie-browser/public/logo.jpg 2>/dev/null || sips -g pixelWidth -g pixelHeight /Users/smzdm/code-data/shiyan/openclaw-auntie-browser/public/logo.jpg)",
+      "Bash(iconutil -c icns /tmp/claw_icon.iconset -o /Users/smzdm/code-data/shiyan/openclaw-auntie-browser/src-tauri/icons/icon.icns\necho \"exit: $?\"\nls -la /Users/smzdm/code-data/shiyan/openclaw-auntie-browser/src-tauri/icons/icon.icns)",
+      "Bash(which convert magick ffmpeg 2>/dev/null; pip3 install pillow 2>/dev/null | tail -1; python3 -c \"from PIL import Image; print\\('pillow ok'\\)\" 2>/dev/null || echo \"no pillow\")",
+      "Bash(python3 << 'EOF'\nfrom PIL import Image\nimport os, shutil\n\nsrc = '/Users/smzdm/code-data/shiyan/openclaw-auntie-browser/public/logo.jpg'\nicons_dir = '/Users/smzdm/code-data/shiyan/openclaw-auntie-browser/src-tauri/icons'\niconset_dir = '/tmp/claw_icon.iconset'\n\nimg = Image.open\\(src\\).convert\\('RGBA'\\)\n\n# --- PNG icons for Tauri ---\nsizes = {\n    '32x32.png':       32,\n    '128x128.png':     128,\n    '128x128@2x.png':  256,\n    'icon.png':        512,\n    'Square30x30Logo.png':  30,\n    'Square44x44Logo.png':  44,\n    'Square71x71Logo.png':  71,\n    'Square89x89Logo.png':  89,\n    'Square107x107Logo.png': 107,\n    'Square142x142Logo.png': 142,\n    'Square150x150Logo.png': 150,\n    'Square284x284Logo.png': 284,\n    'Square310x310Logo.png': 310,\n    'StoreLogo.png':   50,\n}\nfor name, size in sizes.items\\(\\):\n    out = img.resize\\(\\(size, size\\), Image.LANCZOS\\)\n    out.save\\(os.path.join\\(icons_dir, name\\), 'PNG'\\)\n    print\\(f\"  {name} \\({size}x{size}\\)\"\\)\n\n# --- ICO \\(Windows\\) ---\nico_sizes = [\\(16,16\\),\\(32,32\\),\\(48,48\\),\\(64,64\\),\\(128,128\\),\\(256,256\\)]\nico_imgs = [img.resize\\(s, Image.LANCZOS\\) for s in ico_sizes]\nico_imgs[0].save\\(\n    os.path.join\\(icons_dir, 'icon.ico'\\),\n    format='ICO',\n    sizes=ico_sizes,\n    append_images=ico_imgs[1:]\n\\)\nprint\\(\"  icon.ico\"\\)\n\n# --- iconset for .icns ---\nos.makedirs\\(iconset_dir, exist_ok=True\\)\nicns_map = {\n    'icon_16x16.png':      16,\n    'icon_16x16@2x.png':   32,\n    'icon_32x32.png':      32,\n    'icon_32x32@2x.png':   64,\n    'icon_128x128.png':    128,\n    'icon_128x128@2x.png': 256,\n    'icon_256x256.png':    256,\n    'icon_256x256@2x.png': 512,\n    'icon_512x512.png':    512,\n    'icon_512x512@2x.png': 1024,\n}\nfor name, size in icns_map.items\\(\\):\n    img.resize\\(\\(size, size\\), Image.LANCZOS\\).save\\(os.path.join\\(iconset_dir, name\\), 'PNG'\\)\n\nprint\\(\"All PNG/ICO done\"\\)\nEOF)",
+      "Bash(iconutil -c icns /tmp/claw_icon.iconset -o /Users/smzdm/code-data/shiyan/openclaw-auntie-browser/src-tauri/icons/icon.icns\necho \"exit: $?\"\nls -lh /Users/smzdm/code-data/shiyan/openclaw-auntie-browser/src-tauri/icons/icon.icns)",
+      "Bash(for f in 32x32.png 128x128.png \"128x128@2x.png\" icon.icns icon.ico)",
+      "Bash(do)",
+      "Bash(echo -n \"$f: \")",
+      "Read(//Users/smzdm/code-data/shiyan/openclaw-auntie-browser/src-tauri/icons/**)",
+      "Bash(done)",
+      "Bash(find /Users/smzdm/code-data/shiyan/openclaw-auntie-browser -name \"*.md\" -path \"*agent*\" -o -name \"*.json\" -path \"*agent*\" 2>/dev/null | head -20\nls /Users/smzdm/code-data/shiyan/openclaw-auntie-browser/.agent 2>/dev/null || echo \"no .agent dir\")",
+      "Bash(cd /Users/smzdm/code-data/shiyan/openclaw-auntie-browser && cargo build --manifest-path src-tauri/Cargo.toml 2>&1 | tail -50)",
+      "Bash(pnpm build 2>&1 | tail -60)",
+      "Bash(pnpm build 2>&1 | tail -20)"
+    ]
+  }
+}

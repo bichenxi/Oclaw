@@ -242,6 +242,7 @@ declare global {
   const useScrollLock: typeof import('@vueuse/core')['useScrollLock']
   const useSeoMeta: typeof import('@vueuse/head')['useSeoMeta']
   const useSessionStorage: typeof import('@vueuse/core')['useSessionStorage']
+  const useSettingsStore: typeof import('./stores/settings')['useSettingsStore']
   const useShare: typeof import('@vueuse/core')['useShare']
   const useSlots: typeof import('vue')['useSlots']
   const useSorted: typeof import('@vueuse/core')['useSorted']
@@ -316,7 +317,7 @@ declare global {
   export type { RecordingStep } from './stores/recording'
   import('./stores/recording')
   // @ts-ignore
-  export type { TabItem } from './stores/tabs'
+  export type { TabItem, SpecialView } from './stores/tabs'
   import('./stores/tabs')
 }
 
@@ -559,6 +560,7 @@ declare module 'vue' {
     readonly useScrollLock: UnwrapRef<typeof import('@vueuse/core')['useScrollLock']>
     readonly useSeoMeta: UnwrapRef<typeof import('@vueuse/head')['useSeoMeta']>
     readonly useSessionStorage: UnwrapRef<typeof import('@vueuse/core')['useSessionStorage']>
+    readonly useSettingsStore: UnwrapRef<typeof import('./stores/settings')['useSettingsStore']>
     readonly useShare: UnwrapRef<typeof import('@vueuse/core')['useShare']>
     readonly useSlots: UnwrapRef<typeof import('vue')['useSlots']>
     readonly useSorted: UnwrapRef<typeof import('@vueuse/core')['useSorted']>

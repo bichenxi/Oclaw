@@ -69,6 +69,20 @@
 
 ---
 
+## 3.1 下一步目标（建议顺序）
+
+**集成原则**：不以「本应用连接 OpenClaw Gateway」为主；**正道是让 OpenClaw 控制本应用**——本应用暴露 HTTP API，由 OpenClaw 侧 skill 调用来驱动浏览器。详见 `docs/OPENCLAW_INTEGRATION.md`。
+
+| 优先级 | 目标 | 说明 |
+|--------|------|------|
+| **1** | **OpenClaw 控制 Claw Browser** | 本应用起小型 HTTP API（如 `127.0.0.1:18790`），提供 `navigate`、`snapshot`、`click` 等；在 OpenClaw 侧增加 skill 调用该 API，使 AI 操作本应用内的 webview，实现「一个窗口、全透明、可接管」。 |
+| **2** | **权限拦截弹窗（阶段 3）** | Rust 层敏感词/正则拦截高风险动作（支付、提交订单、delete 等），弹窗确认后再放行；可与「OpenClaw 控制浏览器」后的 tool 执行链路结合。 |
+| **3** | **隐私数据脱敏（阶段 3）** | 左侧思考链/工具流日志中，对密码、API Key、身份证等做脱敏显示，降低截图/分享泄露风险。 |
+| **4** | **人机接管的 OpenClaw 联动** | 将「暂停 AI / 继续 AI」状态通过 API 或 skill 通知 OpenClaw，便于用户手动操作时暂停下发指令。 |
+| **5** | **操作录制接入 AI 动作** | 当通过 API 执行 navigate/click 等时，在录制 store 中自动 push 对应步骤，便于回放与审计。 |
+
+---
+
 ## 4. 关键技术踩坑预警 (Pitfalls & Mitigations)
 
 1.  **DOM 获取与跨域问题**：Tauri 2 对子 Webview 的控制力有限。绝对不要指望能直接从主进程读取跨域页面的 DOM。必须依赖 `initialization_script` 注入。

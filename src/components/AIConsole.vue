@@ -5,6 +5,13 @@ import { useRecordingStore } from '@/stores/recording'
 import type { RecordingStep } from '@/stores/recording'
 import { evalInWebview, getDomSnapshot } from '@/api/webview'
 import { simulateStream } from '@/api/app'
+import {
+  startOpenclawProcess,
+  stopOpenclawProcess,
+  isOpenclawProcessRunning,
+  openclawSendV1,
+  type OpenclawV1Params,
+} from '@/api/openclaw'
 
 const store = useTabsStore()
 const recordingStore = useRecordingStore()
@@ -14,8 +21,8 @@ const highlightError = ref('')
 const domSnapshot = ref<string | null>(null)
 const domSnapshotLoading = ref(false)
 
-// 由 OpenClaw / stream-item 事件流式推送；初始为占位提示
-const streamItems = ref<{ type: 'thought' | 'tool'; text: string }[]>([
+// 由 OpenClaw / stream-item 事件流式推送；user 为本地发送的消息
+const streamItems = ref<{ type: 'thought' | 'tool' | 'user'; text: string }[]>([
   { type: 'thought', text: '（接通 OpenClaw 后，思考链将在此流式显示）' },
   { type: 'tool', text: '（工具调用与执行结果将在此显示）' },
 ])
@@ -24,6 +31,70 @@ const isPlaceholder = (items: { type: string; text: string }[]) =>
   items[0].text.includes('接通 OpenClaw') &&
   items[1].text.includes('工具调用与执行结果')
 const streamSimulating = ref(false)
+
+const openclawRunning = ref(false)
+const openclawBusy = ref(false)
+async function refreshOpenclawStatus() {
+  try {
+    openclawRunning.value = await isOpenclawProcessRunning()
+  } catch {
+    openclawRunning.value = false
+  }
+}
+async function runStartOpenclaw() {
+  openclawBusy.value = true
+  try {
+    await startOpenclawProcess()
+    await refreshOpenclawStatus()
+  } catch (e) {
+    console.error(e)
+  } finally {
+    openclawBusy.value = false
+  }
+}
+async function runStopOpenclaw() {
+  openclawBusy.value = true
+  try {
+    await stopOpenclawProcess()
+    await refreshOpenclawStatus()
+  } catch (e) {
+    console.error(e)
+  } finally {
+    openclawBusy.value = false
+  }
+}
+
+const openclawInput = ref('')
+const openclawToken = ref('')
+const openclawSessionKey = ref('agent:main:main2')
+const openclawSendLoading = ref(false)
+const openclawSendError = ref('')
+async function runOpenclawSend() {
+  const input = openclawInput.value.trim()
+  if (!input) {
+    openclawSendError.value = '请输入内容'
+    return
+  }
+  openclawSendError.value = ''
+  if (isPlaceholder(streamItems.value)) {
+    streamItems.value = []
+  }
+  streamItems.value.push({ type: 'user', text: input })
+  openclawSendLoading.value = true
+  try {
+    const params: OpenclawV1Params = {
+      input,
+      stream: true,
+    }
+    if (openclawToken.value.trim()) params.token = openclawToken.value.trim()
+    if (openclawSessionKey.value.trim()) params.session_key = openclawSessionKey.value.trim()
+    await openclawSendV1(params)
+  } catch (e) {
+    openclawSendError.value = String(e)
+  } finally {
+    openclawSendLoading.value = false
+  }
+}
 
 async function runHighlight() {
   const sel = highlightSelector.value.trim()
@@ -100,6 +171,7 @@ async function runSimulateStream() {
 }
 
 onMounted(() => {
+  refreshOpenclawStatus()
   listen<string>('dom-snapshot', (e) => {
     domSnapshot.value = e.payload
   })
@@ -123,6 +195,57 @@ onMounted(() => {
       <span class="ai-console-sub">思考链 · 工具调用</span>
     </div>
     <div class="ai-console-body">
+      <div class="ai-console-openclaw-process">
+        <span class="openclaw-process-label">OpenClaw</span>
+        <span class="openclaw-process-status">{{ openclawRunning ? '已运行' : '未运行' }}</span>
+        <button
+          type="button"
+          class="openclaw-process-btn"
+          :disabled="openclawBusy || openclawRunning"
+          @click="runStartOpenclaw"
+        >
+          启动
+        </button>
+        <button
+          type="button"
+          class="openclaw-process-btn"
+          :disabled="openclawBusy || !openclawRunning"
+          @click="runStopOpenclaw"
+        >
+          停止
+        </button>
+      </div>
+      <div class="ai-console-openclaw-send">
+        <label class="openclaw-send-label">发送到 OpenClaw (HTTP /v1/responses)</label>
+        <input
+          v-model="openclawToken"
+          type="password"
+          placeholder="Bearer Token（可选，或设 OPENCLAW_BEARER_TOKEN）"
+          class="openclaw-send-input"
+          autocomplete="off"
+        />
+        <input
+          v-model="openclawSessionKey"
+          type="text"
+          placeholder="x-openclaw-session-key"
+          class="openclaw-send-input"
+        />
+        <textarea
+          v-model="openclawInput"
+          placeholder="输入消息，如：帮我去小红书搜 3 月青州旅游"
+          class="openclaw-send-textarea"
+          rows="2"
+        />
+        <p v-if="openclawSendError" class="openclaw-send-error">{{ openclawSendError }}</p>
+        <button
+          type="button"
+          class="openclaw-send-btn"
+          :disabled="openclawSendLoading"
+          @click="runOpenclawSend"
+        >
+          {{ openclawSendLoading ? '发送中…' : '发送' }}
+        </button>
+      </div>
       <div class="ai-console-takeover">
         <button
           type="button"
@@ -154,7 +277,9 @@ onMounted(() => {
           class="stream-item"
           :class="item.type"
         >
-          <span class="stream-tag">{{ item.type === 'thought' ? 'Thought' : 'Tool' }}</span>
+          <span class="stream-tag">
+            {{ item.type === 'thought' ? 'Thought' : item.type === 'tool' ? 'Tool' : '我' }}
+          </span>
           <span class="stream-text">{{ item.text }}</span>
         </div>
       </div>
@@ -263,6 +388,66 @@ onMounted(() => {
   gap: 16px;
 }
 
+.ai-console-openclaw-process {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e8e2f4;
+}
+.openclaw-process-label { font-weight: 600; font-size: 13px; color: #5f47ce; }
+.openclaw-process-status { font-size: 12px; color: #9b8ec4; }
+.openclaw-process-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #5f47ce;
+  background: rgba(95, 71, 206, 0.08);
+  border: 1px solid rgba(95, 71, 206, 0.25);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.openclaw-process-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.ai-console-openclaw-send {
+  flex-shrink: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e8e2f4;
+}
+.openclaw-send-label { font-size: 12px; color: #5f47ce; font-weight: 600; display: block; margin-bottom: 6px; }
+.openclaw-send-input {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  border: 1px solid #e8e2f4;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  box-sizing: border-box;
+}
+.openclaw-send-textarea {
+  width: 100%;
+  padding: 8px;
+  font-size: 13px;
+  border: 1px solid #e8e2f4;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  resize: vertical;
+  min-height: 52px;
+  box-sizing: border-box;
+}
+.openclaw-send-error { font-size: 12px; color: #c00; margin-bottom: 6px; }
+.openclaw-send-btn {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #fff;
+  background: #5f47ce;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.openclaw-send-btn:disabled { opacity: 0.7; cursor: not-allowed; }
+
 .ai-console-takeover {
   flex-shrink: 0;
   padding-bottom: 12px;
@@ -351,6 +536,11 @@ onMounted(() => {
 .stream-item.tool {
   background: rgba(34, 197, 94, 0.06);
   border-left-color: #22c55e;
+}
+
+.stream-item.user {
+  background: rgba(99, 102, 241, 0.08);
+  border-left-color: #6366f1;
 }
 
 .stream-tag {
