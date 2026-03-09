@@ -30,3 +30,11 @@ export function deleteSkill(skillName: string): Promise<void> {
 export function deleteSkillFile(skillName: string, filename: string): Promise<void> {
   return invoke('delete_skill_file', { skillName, filename })
 }
+
+export function checkBuiltinSkillInstalled(): Promise<boolean> {
+  return invoke('check_builtin_skill_installed')
+}
+
+export function installBuiltinSkill(): Promise<void> {
+  return invoke('install_builtin_skill')
+}

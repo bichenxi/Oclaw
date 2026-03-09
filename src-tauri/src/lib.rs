@@ -66,6 +66,8 @@ pub fn run() {
             skills::create_skill,
             skills::delete_skill,
             skills::delete_skill_file,
+            skills::check_builtin_skill_installed,
+            skills::install_builtin_skill,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

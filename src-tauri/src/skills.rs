@@ -56,6 +56,70 @@ fn parse_frontmatter(text: &str) -> (Option<String>, Option<String>) {
     (version, description)
 }
 
+// ── Built-in skill: claw-browser-control ─────────────────────────────────────
+
+const BUILTIN_SKILL_NAME: &str = "claw-browser-control";
+const BUILTIN_SKILL_MD: &str = include_str!("../../openclaw-skill/SKILL.md");
+
+/// Returns true if the claw-browser-control skill is installed.
+#[tauri::command]
+pub fn check_builtin_skill_installed(app: AppHandle) -> Result<bool, String> {
+    let path = skills_dir(&app)?.join(BUILTIN_SKILL_NAME).join("SKILL.md");
+    Ok(path.exists())
+}
+
+/// Installs (or re-installs) the bundled claw-browser-control skill,
+/// and registers it in ~/.openclaw/openclaw.json.
+#[tauri::command]
+pub fn install_builtin_skill(app: AppHandle) -> Result<(), String> {
+    let dir = skills_dir(&app)?.join(BUILTIN_SKILL_NAME);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::write(dir.join("SKILL.md"), BUILTIN_SKILL_MD).map_err(|e| e.to_string())?;
+    register_skill_in_openclaw(&app)?;
+    Ok(())
+}
+
+/// Adds claw-browser-control to skills.entries in ~/.openclaw/openclaw.json
+/// and also ensures `exec` is in tools.alsoAllow.
+fn register_skill_in_openclaw(app: &AppHandle) -> Result<(), String> {
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    let config_path = home.join(".openclaw").join("openclaw.json");
+    if !config_path.exists() {
+        return Ok(());
+    }
+    let content = fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
+    let mut json: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
+    // Register skill in skills.entries
+    if let Some(entries) = json
+        .get_mut("skills")
+        .and_then(|s| s.get_mut("entries"))
+        .and_then(|e| e.as_object_mut())
+    {
+        if !entries.contains_key(BUILTIN_SKILL_NAME) {
+            entries.insert(
+                BUILTIN_SKILL_NAME.to_string(),
+                serde_json::json!({ "enabled": true }),
+            );
+        }
+    }
+
+    // Ensure exec is in tools.alsoAllow
+    if let Some(also_allow) = json
+        .get_mut("tools")
+        .and_then(|t| t.get_mut("alsoAllow"))
+        .and_then(|a| a.as_array_mut())
+    {
+        if !also_allow.iter().any(|v| v.as_str() == Some("exec")) {
+            also_allow.push(serde_json::json!("exec"));
+        }
+    }
+
+    let new_content = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
+    fs::write(&config_path, new_content).map_err(|e| e.to_string())
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 /// List all skills with their metadata.

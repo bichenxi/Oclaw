@@ -6,6 +6,8 @@ import {
   createSkill,
   deleteSkill,
   deleteSkillFile,
+  checkBuiltinSkillInstalled,
+  installBuiltinSkill,
   type SkillMeta,
 } from '@/api/skills'
 
@@ -26,6 +28,10 @@ const creating = ref(false)
 const showNewFile = ref(false)
 const newFileName = ref('')
 
+// Built-in skill
+const builtinInstalled = ref(false)
+const installing = ref(false)
+
 // Confirm delete modal
 const confirmDelete = ref<{ type: 'skill' | 'file'; name: string } | null>(null)
 
@@ -37,7 +43,9 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    skills.value = await listSkills()
+    const [skillList, installed] = await Promise.all([listSkills(), checkBuiltinSkillInstalled()])
+    skills.value = skillList
+    builtinInstalled.value = installed
     if (!selectedSkill.value && skills.value.length > 0) {
       await selectSkill(skills.value[0])
     } else if (selectedSkill.value) {
@@ -49,6 +57,23 @@ async function load() {
     error.value = String(e)
   } finally {
     loading.value = false
+  }
+}
+
+// ── Install builtin skill ─────────────────────────────────────────────────────
+async function doInstallBuiltin() {
+  installing.value = true
+  error.value = ''
+  try {
+    await installBuiltinSkill()
+    await load()
+    // Auto-select the installed skill
+    const skill = skills.value.find(s => s.name === 'claw-browser-control')
+    if (skill) await selectSkill(skill)
+  } catch (e) {
+    error.value = String(e)
+  } finally {
+    installing.value = false
   }
 }
 
@@ -280,11 +305,59 @@ onMounted(load)
 
         <!-- Skill list — right-click for more actions -->
         <div class="skill-list flex-1 overflow-y-auto px-2 pb-2">
-          <div v-if="loading && skills.length === 0" class="py-8 text-center text-[12px] text-[#c4bdd8]">加载中…</div>
-          <div v-else-if="skills.length === 0" class="py-8 text-center text-[12px] text-[#c4bdd8]">暂无技能，点击「新建」创建</div>
+
+          <!-- 内置技能：claw-browser-control -->
+          <div class="mb-2 mt-1.5">
+            <div class="px-1 mb-1">
+              <span class="text-[10px] font-semibold text-[#b8b0cc] uppercase tracking-[0.8px]">内置技能</span>
+            </div>
+            <div
+              class="flex items-center gap-2.5 px-2.5 py-2.5 rounded-[8px] transition select-none"
+              :class="builtinInstalled
+                ? (selectedSkill?.name === 'claw-browser-control' ? 'bg-secondary/8 cursor-pointer' : 'hover:bg-[#f5f2fc] cursor-pointer')
+                : 'bg-[rgba(245,158,11,0.05)] border border-[rgba(245,158,11,0.2)]'"
+              @click="builtinInstalled && selectSkill(skills.find(s => s.name === 'claw-browser-control')!)"
+            >
+              <img src="/logo.jpg" class="w-6 h-6 rounded-[6px] object-cover shrink-0 shadow-sm" alt="logo" />
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-[12px] font-medium text-[#2d2b3d] truncate">claw-browser-control</span>
+                  <span
+                    class="shrink-0 px-1.5 py-px rounded-[4px] text-[9px] font-semibold tracking-[0.3px]"
+                    :class="builtinInstalled
+                      ? 'bg-[rgba(34,197,94,0.1)] text-[#16a34a]'
+                      : 'bg-[rgba(245,158,11,0.12)] text-[#b45309]'"
+                  >{{ builtinInstalled ? '已安装' : '未安装' }}</span>
+                </div>
+                <div class="text-[10px] text-[#b8b0cc] mt-0.5">张大妈 · 浏览器控制专属技能</div>
+              </div>
+              <button
+                v-if="!builtinInstalled"
+                type="button"
+                class="shrink-0 flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-white bg-[linear-gradient(135deg,#7c5cfc,#5f47ce)] rounded-[6px] cursor-pointer transition hover:opacity-85 disabled:opacity-50 shadow-[0_1px_6px_rgba(95,71,206,0.3)]"
+                :disabled="installing"
+                @click.stop="doInstallBuiltin"
+              >
+                <svg v-if="!installing" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                <span v-else class="w-2.5 h-2.5 border border-white/60 border-t-white rounded-full animate-spin" />
+                {{ installing ? '…' : '安装' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="mx-1 mb-2 border-t border-[#f0ecfa]" />
+          <div class="px-1 mb-1">
+            <span class="text-[10px] font-semibold text-[#b8b0cc] uppercase tracking-[0.8px]">自定义技能</span>
+          </div>
+
+          <div v-if="loading && skills.length === 0" class="py-6 text-center text-[12px] text-[#c4bdd8]">加载中…</div>
+          <div v-else-if="skills.filter(s => s.name !== 'claw-browser-control').length === 0" class="py-4 text-center text-[12px] text-[#c4bdd8]">暂无自定义技能</div>
 
           <div
-            v-for="skill in skills"
+            v-for="skill in skills.filter(s => s.name !== 'claw-browser-control')"
             :key="skill.name"
             class="flex items-start gap-2.5 px-2.5 py-2.5 mt-0.5 rounded-[8px] cursor-pointer select-none transition"
             :class="selectedSkill?.name === skill.name
