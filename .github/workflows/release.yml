@@ -21,12 +21,13 @@ jobs:
             args: --target x86_64-apple-darwin
 
           # Windows / Linux 可按需启用：
-          # - name: Windows
-          #   runs-on: windows-latest
-          #   args: ''
-          # - name: Linux
-          #   runs-on: ubuntu-22.04
-          #   args: ''
+          - name: Windows
+            runs-on: windows-latest
+            args: ''
+
+          - name: Linux
+            runs-on: ubuntu-22.04
+            args: ''
 
     runs-on: ${{ matrix.runs-on }}
 
@@ -97,8 +98,10 @@ jobs:
             ### 安装
             - **macOS Apple Silicon**: 下载 `_aarch64.dmg`
             - **macOS Intel**: 下载 `_x64.dmg`
+            - **Windows**: 下载 `_x64-setup.exe`（安装包）或 `_x64_en-US.msi`
+            - **Linux**: 下载 `.AppImage`（免安装）或 `.deb` / `.rpm`
 
-            > 首次打开如遇"无法验证开发者"，在访达中右键 → 打开即可。
+            > macOS 首次打开如遇"无法验证开发者"，在访达中右键 → 打开即可。
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
