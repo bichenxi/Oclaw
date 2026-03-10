@@ -12,15 +12,15 @@ Claw Browser 是一款轻量桌面浏览器，核心目的只有一个：**让 A
 
 ---
 
-## 张大妈是谁
+## 大虾是谁
 
-**张大妈**是内置在 OpenClaw 中的 AI 网页助手角色。当你对 OpenClaw 说：
+**大虾**是内置在 OpenClaw 中的 AI 网页助手角色。当你对 OpenClaw 说：
 
-- 「张大妈帮我查一下…」
+- 「大虾帮我查一下…」
 - 「大妈帮我比比价格…」
 - 「大虾帮我看看这个…」
 
-张大妈就会接管 Claw Browser，帮你完成搜资讯、比价格、追热点、提取内容、填写表单……一系列网页任务。
+大虾就会接管 Claw Browser，帮你完成搜资讯、比价格、追热点、提取内容、填写表单……一系列网页任务。
 
 你不需要动手，盯着屏幕看就行。
 
@@ -48,7 +48,7 @@ Claw Browser 是一款轻量桌面浏览器，核心目的只有一个：**让 A
 
 1. 启动 Claw Browser
 2. 打开 OpenClaw，连接到本地浏览器
-3. 对张大妈说出你的任务
+3. 对大虾说出你的任务
 
 浏览器会在后台自动完成操作，你只需要等结果。
 
@@ -103,4 +103,4 @@ pnpm tauri build
 
 ## 相关项目
 
-- [OpenClaw](https://github.com/OpenClaw) — AI Agent 平台，张大妈的大本营
+- [OpenClaw](https://github.com/OpenClaw) — AI Agent 平台，大虾的大本营

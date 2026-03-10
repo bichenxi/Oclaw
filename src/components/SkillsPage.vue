@@ -329,7 +329,7 @@ onMounted(load)
                       : 'bg-[rgba(245,158,11,0.12)] text-[#b45309]'"
                   >{{ builtinInstalled ? '已安装' : '未安装' }}</span>
                 </div>
-                <div class="text-[10px] text-[#b8b0cc] mt-0.5">张大妈 · 浏览器控制专属技能</div>
+                <div class="text-[10px] text-[#b8b0cc] mt-0.5">大虾 · 浏览器控制专属技能</div>
               </div>
               <button
                 v-if="!builtinInstalled"
