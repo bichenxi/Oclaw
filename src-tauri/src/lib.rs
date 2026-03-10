@@ -1,6 +1,7 @@
 mod api;
 mod app;
 mod config;
+mod gateway;
 mod installer;
 mod openclaw;
 mod openclaw_http;
@@ -74,6 +75,8 @@ pub fn run() {
             installer::start_install,
             installer::cancel_install,
             installer::check_openclaw_installed,
+            gateway::check_and_fix_gateway_config,
+            gateway::restart_openclaw_gateway,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

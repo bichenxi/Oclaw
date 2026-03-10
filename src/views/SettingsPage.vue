@@ -4,6 +4,7 @@ import { useTabsStore } from '@/stores/tabs'
 import { useProfileStore, PROFILE_OPTIONS } from '@/stores/profile'
 import { checkOpenclawAlive } from '@/api/openclaw'
 import { getOpenclawGatewayToken } from '@/api/skills'
+import { checkAndFixGatewayConfig, restartOpenclawGateway, type GatewayConfigStatus } from '@/api/gateway'
 
 const settings = useSettingsStore()
 const store = useTabsStore()
@@ -18,6 +19,40 @@ const openclawAlive = ref(false)
 const checkingAlive = ref(false)
 const fetchingToken = ref(false)
 const fetchTokenError = ref('')
+
+// ── Gateway 配置检测 ────────────────────────────────────────
+const gatewayStatus = ref<GatewayConfigStatus | null>(null)
+const checkingGateway = ref(false)
+const restartingGateway = ref(false)
+const restartError = ref('')
+const restartSuccess = ref(false)
+
+async function checkGatewayConfig() {
+  checkingGateway.value = true
+  gatewayStatus.value = null
+  restartError.value = ''
+  restartSuccess.value = false
+  try {
+    gatewayStatus.value = await checkAndFixGatewayConfig()
+  } finally {
+    checkingGateway.value = false
+  }
+}
+
+async function doRestartGateway() {
+  restartingGateway.value = true
+  restartError.value = ''
+  restartSuccess.value = false
+  try {
+    await restartOpenclawGateway()
+    restartSuccess.value = true
+    setTimeout(() => { restartSuccess.value = false }, 3000)
+  } catch (e: any) {
+    restartError.value = e?.message ?? String(e)
+  } finally {
+    restartingGateway.value = false
+  }
+}
 
 const profileLabels: Record<string, string> = {
   default: '默认',
@@ -234,6 +269,103 @@ onMounted(refreshStatus)
               @click="refreshStatus"
             >
               {{ checkingAlive ? '检测中…' : '测试连接' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Gateway 配置检测 ── -->
+      <div class="bg-white border border-[#e8e2f4] rounded-[12px] overflow-hidden mb-4">
+        <div class="flex items-center gap-[7px] px-5 py-3.5 border-b border-[#f0ecfa]">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-secondary">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+          </svg>
+          <span class="text-[13px] font-semibold text-secondary">Gateway 配置检测</span>
+        </div>
+        <div class="p-5">
+          <p class="text-[11px] text-[#9b8ec4] m-0 mb-3 leading-[1.6]">
+            检测 <code class="bg-[#f5f3ff] text-secondary px-1 py-px rounded text-[10px]">~/.openclaw/openclaw.json</code>
+            中 <code class="bg-[#f5f3ff] text-secondary px-1 py-px rounded text-[10px]">gateway.controlUi</code> 和
+            <code class="bg-[#f5f3ff] text-secondary px-1 py-px rounded text-[10px]">gateway.http.endpoints</code>
+            配置是否完整，缺失时自动补写。
+          </p>
+
+          <!-- 检测结果 -->
+          <div
+            v-if="gatewayStatus"
+            class="flex items-start gap-2 px-3.5 py-2.5 rounded-[8px] text-[12px] mb-3 leading-relaxed"
+            :class="gatewayStatus.error
+              ? 'bg-[rgba(239,68,68,0.06)] border border-[rgba(239,68,68,0.18)] text-[#dc2626]'
+              : gatewayStatus.already_ok
+                ? 'bg-[rgba(34,197,94,0.07)] border border-[rgba(34,197,94,0.2)] text-[#15803d]'
+                : 'bg-[rgba(95,71,206,0.06)] border border-secondary/18 text-secondary'"
+          >
+            <svg v-if="gatewayStatus.error" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mt-px shrink-0">
+              <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            <svg v-else-if="gatewayStatus.already_ok" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mt-px shrink-0">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+            <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mt-px shrink-0">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+            <span>{{
+              gatewayStatus.error
+                ? gatewayStatus.error
+                : gatewayStatus.already_ok
+                  ? '配置完整，无需修改'
+                  : '配置已补写完成，建议重启 gateway 使配置生效'
+            }}</span>
+          </div>
+
+          <!-- 重启结果 -->
+          <div v-if="restartSuccess" class="flex items-center gap-2 px-3.5 py-2.5 rounded-[8px] text-[12px] mb-3 bg-[rgba(34,197,94,0.07)] border border-[rgba(34,197,94,0.2)] text-[#15803d]">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+            Gateway 已成功重启
+          </div>
+          <div v-if="restartError" class="flex items-start gap-2 px-3.5 py-2.5 rounded-[8px] text-[12px] mb-3 bg-[rgba(239,68,68,0.06)] border border-[rgba(239,68,68,0.18)] text-[#dc2626]">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mt-px shrink-0">
+              <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            <div>
+              <div class="mb-1">自动重启失败，请手动执行：</div>
+              <code class="block bg-[rgba(239,68,68,0.08)] px-2 py-1 rounded text-[11px] font-mono">openclaw gateway restart</code>
+              <div class="mt-1 text-[11px] opacity-70">{{ restartError }}</div>
+            </div>
+          </div>
+
+          <!-- 操作按钮 -->
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              class="flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-medium rounded-[8px] border cursor-pointer transition disabled:opacity-50 disabled:cursor-not-allowed"
+              :class="checkingGateway
+                ? 'border-[#e8e2f4] text-[#8a80a7] bg-transparent'
+                : 'border-secondary/30 text-secondary bg-secondary/6 hover:bg-secondary/12'"
+              :disabled="checkingGateway"
+              @click="checkGatewayConfig"
+            >
+              <svg v-if="!checkingGateway" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              </svg>
+              <span v-else class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+              {{ checkingGateway ? '检测中…' : '检测并修复配置' }}
+            </button>
+            <button
+              v-if="gatewayStatus && !gatewayStatus.error && !gatewayStatus.already_ok"
+              type="button"
+              class="flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-medium rounded-[8px] border cursor-pointer transition disabled:opacity-50 disabled:cursor-not-allowed border-[rgba(34,197,94,0.35)] text-[#15803d] bg-[rgba(34,197,94,0.06)] hover:bg-[rgba(34,197,94,0.12)]"
+              :disabled="restartingGateway"
+              @click="doRestartGateway"
+            >
+              <svg v-if="!restartingGateway" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              </svg>
+              <span v-else class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+              {{ restartingGateway ? '重启中…' : '重启 Gateway' }}
             </button>
           </div>
         </div>
