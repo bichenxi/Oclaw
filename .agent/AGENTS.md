@@ -20,11 +20,13 @@
 
 ## 目录约定
 
-- `src/pages/`：页面组件，文件即路由。
-- `src/layouts/`：布局组件，`default.vue` 为默认布局。
-- `src/components/`：通用 Vue 组件。
-- `src/stores/`：Pinia stores。
-- `src-tauri/src/lib.rs`：Tauri 命令与后端逻辑入口。
+- `src/pages/`：URL 路由页（unplugin-vue-router 自动注册），目前只有首页 `index.vue`。
+- `src/views/`：应用级全屏面板（OpenclawPage、SettingsPage、SetupPage、SkillsPage），通过 Pinia `specialView` 状态切换，不注册 URL 路由。
+- `src/components/`：小型可复用 UI 组件（TabBar、AIConsole 等）。
+- `src/layouts/`：布局组件，`default.vue` 为默认布局，内含 specialView 条件渲染逻辑。
+- `src/stores/`：Pinia stores（tabs、settings、profile、recording、installer、openclaw 等）。
+- `src/api/`：Tauri invoke 封装层，按领域分文件。
+- `src-tauri/src/`：Rust 后端，各功能模块化（api.rs HTTP 服务、webview/、installer、skills 等）。
 
 ## 扩展时注意
 
