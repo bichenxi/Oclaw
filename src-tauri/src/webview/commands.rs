@@ -14,12 +14,10 @@ pub async fn create_tab_webview(app: AppHandle, label: String, url: String, righ
     let (x, y, w, h) = rect::calc_webview_rect(&window, right_margin)?;
     let stealth_js = include_str!("../stealth.js");
     let bridge_js = include_str!("../bridge.js");
-    let xhs_js = include_str!("../xhs.js");
     let init_script = format!(
-        "{}\n{};\n{}\nwindow.__clawBridgeLabel={:?};",
+        "{}\n{};\nwindow.__clawBridgeLabel={:?};",
         stealth_js,
         bridge_js.trim_end().trim_end_matches(';'),
-        xhs_js,
         label
     );
 

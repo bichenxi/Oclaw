@@ -6,7 +6,6 @@
 
 1. 读取 `src-tauri/src/api.rs` —— Rust 端当前暴露的所有 HTTP 端点（路由、参数、返回值）
 2. 读取 `openclaw-skill/SKILL.md` —— Agent 技能文档（API 参考表）
-3. 读取 `openclaw-skill/xhs.md` —— 小红书专属技能
 
 ## 第二步：差异分析
 

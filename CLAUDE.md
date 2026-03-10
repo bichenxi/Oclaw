@@ -81,8 +81,7 @@ src-tauri/
 
 ```
 openclaw-skill/
-├── SKILL.md      ← 通用浏览器操控技能（所有站点通用 API）
-└── xhs.md        ← 小红书专属技能（/xhs/* 端点）
+└── SKILL.md      ← 通用浏览器操控技能（所有站点通用 API）
 ```
 
 ### Claude Code 的职责 ⚠️
@@ -93,7 +92,6 @@ openclaw-skill/
 | 代码改动 | 需要更新的 skill 文件 |
 |---------|----------------------|
 | 修改通用端点（`/snapshot`, `/click` 等） | `openclaw-skill/SKILL.md` 的"API 快速参考"表格 |
-| 修改小红书端点（`/xhs/*`） | `openclaw-skill/xhs.md` 的"专属 API"表格 |
 | 新增站点专属端点 | 新建对应 skill 文件，并在 `SKILL.md` 站点表格中登记 |
 
 ### 可用的 Skill 命令
