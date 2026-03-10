@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# fnm sidecar 二进制（本地/CI 运行 scripts/download-fnm.sh 下载，不入 git）
+src-tauri/binaries/fnm-*

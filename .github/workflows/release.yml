@@ -78,6 +78,13 @@ jobs:
       - name: Install frontend deps
         run: pnpm install
 
+      # ── 下载 fnm sidecar ──────────────────────────────────────────────────
+      - name: Download fnm sidecar
+        env:
+          RUST_TARGET: ${{ matrix.rust-target }}
+        shell: bash
+        run: bash scripts/download-fnm.sh
+
       # ── macOS 代码签名（可选）─────────────────────────────────────────────
       # 若需要签名，在 GitHub Secrets 中配置以下变量：
       #   APPLE_CERTIFICATE          - Base64 编码的 .p12 证书

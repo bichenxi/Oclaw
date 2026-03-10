@@ -1,6 +1,7 @@
 mod api;
 mod app;
 mod config;
+mod installer;
 mod openclaw;
 mod openclaw_http;
 mod openclaw_process;
@@ -10,6 +11,7 @@ mod webview;
 
 use api::{set_active_tab_label, set_ai_paused, ActiveTabLabel, AiPaused, PendingEvalResult, PendingSnapshot};
 use app::{emit_stream_item, simulate_stream};
+use installer::InstallerState;
 use openclaw::{openclaw_connect, openclaw_disconnect, openclaw_send_chat, OpenClawState};
 use openclaw_http::{check_openclaw_alive, openclaw_send_v1};
 use profile::{get_current_profile, set_current_profile};
@@ -30,6 +32,7 @@ pub fn run() {
         .manage(PendingEvalResult(std::sync::Mutex::new(None)))
         .manage(AiPaused::default())
         .manage(openclaw_process::OpenClawProcess::default())
+        .manage(InstallerState::default())
         .setup(|app| {
             api::spawn_http_server(app.handle().clone());
             Ok(())
@@ -67,6 +70,9 @@ pub fn run() {
             skills::check_builtin_skill_installed,
             skills::install_builtin_skill,
             skills::get_openclaw_gateway_token,
+            installer::start_install,
+            installer::cancel_install,
+            installer::check_openclaw_installed,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

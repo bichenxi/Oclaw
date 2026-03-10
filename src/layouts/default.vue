@@ -3,6 +3,7 @@ import TabBar from '@/components/TabBar.vue'
 import OpenclawPage from '@/components/OpenclawPage.vue'
 import SettingsPage from '@/components/SettingsPage.vue'
 import SkillsPage from '@/components/SkillsPage.vue'
+import SetupPage from '@/components/SetupPage.vue'
 import { useTabsStore } from '@/stores/tabs'
 
 const store = useTabsStore()
@@ -14,7 +15,8 @@ const store = useTabsStore()
 
     <!-- 内容区 -->
     <div class="flex-1 min-h-0 overflow-hidden relative">
-      <OpenclawPage v-if="store.specialView === 'openclaw'" />
+      <SetupPage v-if="store.specialView === 'setup'" />
+      <OpenclawPage v-else-if="store.specialView === 'openclaw'" />
       <SettingsPage v-else-if="store.specialView === 'settings'" />
       <SkillsPage v-else-if="store.specialView === 'skills'" />
       <RouterView v-else-if="store.isHome" />

@@ -35,6 +35,10 @@
         {
           "name": "node",
           "sidecar": false
+        },
+        {
+          "name": "fnm",
+          "sidecar": true
         }
       ]
     }

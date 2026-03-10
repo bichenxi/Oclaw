@@ -195,10 +195,18 @@ watch(messages, scrollToBottom, { deep: true })
     </div>
 
     <!-- 错误提示 -->
-    <p
+    <div
       v-if="sendError"
-      class="shrink-0 m-0 px-5 py-2 text-[12px] text-[#dc2626] bg-[rgba(239,68,68,0.06)] border-t border-[rgba(239,68,68,0.15)]"
-    >{{ sendError }}</p>
+      class="shrink-0 px-5 py-2.5 text-[12px] bg-[rgba(239,68,68,0.06)] border-t border-[rgba(239,68,68,0.15)] flex items-start gap-2"
+    >
+      <span class="text-[#dc2626] flex-1 leading-relaxed">{{ sendError }}</span>
+      <button
+        v-if="sendError.includes('502') || sendError.includes('401') || sendError.includes('403')"
+        type="button"
+        class="shrink-0 text-secondary text-[12px] underline bg-transparent border-none cursor-pointer p-0 leading-relaxed"
+        @click="store.switchToSpecialView('settings')"
+      >检查设置</button>
+    </div>
 
     <!-- 输入区 -->
     <div class="shrink-0 px-5 py-4 bg-white border-t border-[#e8e2f4]">

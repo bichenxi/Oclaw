@@ -8,20 +8,27 @@ function startDrag(e: MouseEvent) {
   if (e.button !== 0) return
   getCurrentWindow().startDragging()
 }
+
+// setup 页时禁止点击 tab 项，但保留原生拖拽（-webkit-app-region:drag 不受影响）
+const disabledItem = computed(() =>
+  store.specialView === 'setup' ? 'pointer-events-none opacity-40' : '',
+)
 </script>
 
 <template>
   <!-- tab-bar: -webkit-app-region:drag 无法原子化，保留在 style -->
-  <div class="tab-bar flex items-stretch h-11 bg-[#f5f2fc] border-b border-[#e8e2f4] pr-2 gap-0.5 overflow-x-auto overflow-y-hidden shrink-0">
+  <div
+    class="tab-bar flex items-stretch h-11 bg-[#f5f2fc] border-b border-[#e8e2f4] pr-2 gap-0.5 overflow-x-auto overflow-y-hidden shrink-0"
+  >
     <!-- 红绿灯占位拖拽区 -->
     <div class="drag-zone w-20 shrink-0" @mousedown="startDrag" />
 
     <!-- 首页 Tab -->
     <div
       class="tab-item flex items-center gap-1.5 px-3 min-w-auto rounded-t-lg cursor-pointer transition text-[#8a80a7] text-[13px] whitespace-nowrap relative mt-1.5"
-      :class="store.isHome
+      :class="[disabledItem, store.isHome
         ? 'bg-white text-secondary shadow-[0_-1px_4px_rgba(95,71,206,0.06)]'
-        : 'hover:bg-secondary/6 hover:text-secondary'"
+        : 'hover:bg-secondary/6 hover:text-secondary']"
       @click="store.switchToHome()"
     >
       <svg class="shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -36,9 +43,9 @@ function startDrag(e: MouseEvent) {
       v-for="tab in store.tabs"
       :key="tab.id"
       class="tab-item flex items-center gap-1.5 px-3.5 min-w-[60px] max-w-[200px] rounded-t-lg cursor-pointer transition text-[#8a80a7] text-[13px] whitespace-nowrap relative mt-1.5"
-      :class="store.activeTabId === tab.id && store.specialView === null
+      :class="[disabledItem, store.activeTabId === tab.id && store.specialView === null
         ? 'bg-white text-secondary shadow-[0_-1px_4px_rgba(95,71,206,0.06)]'
-        : 'hover:bg-secondary/6 hover:text-secondary'"
+        : 'hover:bg-secondary/6 hover:text-secondary']"
       @click="store.switchTab(tab.id)"
     >
       <span class="overflow-hidden text-ellipsis whitespace-nowrap leading-none">{{ tab.title }}</span>
@@ -59,9 +66,9 @@ function startDrag(e: MouseEvent) {
     <!-- OpenClaw 按钮 -->
     <div
       class="tab-item flex items-center gap-[5px] px-3 min-w-auto rounded-t-lg cursor-pointer transition text-[#8a80a7] text-[13px] whitespace-nowrap relative mt-1.5"
-      :class="store.specialView === 'openclaw'
+      :class="[disabledItem, store.specialView === 'openclaw'
         ? 'bg-[rgba(124,92,252,0.12)] text-[#7c5cfc]'
-        : 'hover:bg-secondary/6 hover:text-secondary'"
+        : 'hover:bg-secondary/6 hover:text-secondary']"
       @click="store.switchToSpecialView('openclaw')"
     >
       <img class="w-[18px] h-[18px] rounded-[5px] object-cover shrink-0" src="/logo.jpg" alt="logo" />
@@ -71,9 +78,9 @@ function startDrag(e: MouseEvent) {
     <!-- 技能管理按钮 -->
     <div
       class="tab-item flex items-center gap-[5px] px-3 min-w-auto rounded-t-lg cursor-pointer transition text-[#8a80a7] text-[13px] whitespace-nowrap relative mt-1.5"
-      :class="store.specialView === 'skills'
+      :class="[disabledItem, store.specialView === 'skills'
         ? 'bg-secondary/10 text-secondary'
-        : 'hover:bg-secondary/6 hover:text-secondary'"
+        : 'hover:bg-secondary/6 hover:text-secondary']"
       @click="store.switchToSpecialView('skills')"
     >
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
@@ -88,9 +95,9 @@ function startDrag(e: MouseEvent) {
     <!-- 设置按钮 -->
     <div
       class="tab-item flex items-center gap-[5px] px-3 min-w-auto rounded-t-lg cursor-pointer transition text-[#8a80a7] text-[13px] whitespace-nowrap relative mt-1.5"
-      :class="store.specialView === 'settings'
+      :class="[disabledItem, store.specialView === 'settings'
         ? 'bg-secondary/10 text-secondary'
-        : 'hover:bg-secondary/6 hover:text-secondary'"
+        : 'hover:bg-secondary/6 hover:text-secondary']"
       @click="store.switchToSpecialView('settings')"
     >
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">

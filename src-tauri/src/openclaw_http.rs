@@ -101,6 +101,7 @@ pub async fn check_openclaw_alive(base_url: Option<String>) -> bool {
     let url = format!("{}/", base.trim_end_matches('/'));
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(1500))
+        .no_proxy()
         .build()
     {
         Ok(c) => c,
@@ -152,6 +153,7 @@ pub async fn openclaw_send_v1(app: AppHandle, params: OpenclawV1Params) -> Resul
     });
 
     let client = reqwest::Client::builder()
+        .no_proxy()
         .build()
         .map_err(|e| e.to_string())?;
 
