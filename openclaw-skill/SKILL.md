@@ -92,7 +92,7 @@ http://127.0.0.1:18790
 ```json
 {
   "meta": {
-    "url": "https://example.com/search?q=...",
+    "url": "https://example.com/search?q=test",
     "title": "搜索结果",
     "viewport": { "w": 1280, "h": 800 },
     "scroll": { "y": 0, "maxY": 4800 }
@@ -102,38 +102,104 @@ http://127.0.0.1:18790
       "id": 1,
       "role": "input",
       "tag": "input",
+      "text": "",
       "selector": "input[name='q']",
-      "placeholder": "搜索",
+      "inputType": "text",
+      "placeholder": "搜索关键词",
+      "value": "当前已输入的内容",
+      "rect": { "x": 120, "y": 60, "w": 400, "h": 40 },
       "inViewport": true
     },
     {
-      "id": 7,
+      "id": 2,
+      "role": "checkbox",
+      "tag": "input",
+      "text": "同意条款",
+      "selector": "#agree",
+      "inputType": "checkbox",
+      "checked": false,
+      "rect": { "x": 20, "y": 200, "w": 16, "h": 16 },
+      "inViewport": true
+    },
+    {
+      "id": 3,
+      "role": "select",
+      "tag": "select",
+      "text": "北京",
+      "selector": "select[name='city']",
+      "options": [
+        { "value": "bj", "text": "北京", "selected": true },
+        { "value": "sh", "text": "上海", "selected": false }
+      ],
+      "rect": { "x": 20, "y": 240, "w": 180, "h": 36 },
+      "inViewport": true
+    },
+    {
+      "id": 4,
       "role": "link",
       "tag": "a",
       "text": "文章标题",
       "selector": "a[data-id='abc']",
       "href": "https://example.com/article/abc",
+      "rect": { "x": 20, "y": 300, "w": 600, "h": 24 },
       "inViewport": true
     },
     {
-      "id": 12,
+      "id": 5,
       "role": "button",
       "tag": "button",
-      "text": "加载更多",
-      "selector": "#load-more",
+      "text": "提交",
+      "selector": "#submit-btn",
+      "disabled": true,
+      "rect": { "x": 20, "y": 400, "w": 120, "h": 40 },
       "inViewport": false
     }
   ]
 }
 ```
 
+**元素字段说明：**
+
+| 字段 | 必有 | 说明 |
+|------|------|------|
+| `id` | ✅ | 顺序编号，仅供阅读参考 |
+| `role` | ✅ | `input` `textarea` `button` `link` `select` `checkbox` `radio` `clickable` |
+| `tag` | ✅ | HTML 标签名 |
+| `text` | ✅ | 可见文字或 aria-label（最多 100 字符） |
+| `selector` | ✅ | 推荐 CSS 选择器，**直接用于 API 调用** |
+| `rect` | ✅ | `{x,y,w,h}` 元素在页面中的位置（像素） |
+| `inViewport` | ✅ | 是否在当前视口可见 |
+| `inputType` | input 元素 | `text` `password` `email` `checkbox` `radio` `submit` 等 |
+| `placeholder` | 有时 | input/textarea 的占位提示文字 |
+| `value` | 有时 | input/textarea 当前已填入的值（最多 200 字符） |
+| `checked` | checkbox/radio | 当前是否选中 |
+| `href` | a 标签 | 链接目标 URL |
+| `options` | select | 可选项列表 `[{value, text, selected}]`（最多 20 项） |
+| `disabled` | 有时 | `true` 表示禁用，无法操作 |
+
 **决策逻辑：**
-- `role=input/textarea` → `/type`
-- `role=button/link` → `/click`
-- `role=select` → `/select`
-- `inViewport: false` → 先 `/scroll {"selector":"..."}` 滚到它
+- `role=input/textarea` → `/type`（先看 `value` 字段，判断是否已有内容，按需用 `append:true`）
+- `role=button/link/clickable` → `/click`
+- `role=select` → 读 `options` 找到目标选项的 `value`，再用 `/select`
+- `role=checkbox/radio` → `/click` 切换（先看 `checked` 字段确认当前状态）
+- `inViewport: false` → 先 `/scroll {"selector":"..."}` 滚到它再操作
 - `meta.scroll.maxY > meta.scroll.y` → 下面还有内容，可继续滚动
-- `disabled: true` → 先满足前置条件
+- `disabled: true` → ⚠️ 无法直接操作，先满足前置条件（如填写必填项）
+
+---
+
+## selector 可靠性
+
+bridge.js 生成 selector 的优先级（从高到低）：
+
+1. `#id` — 最稳定，优先使用
+2. `[data-testid="..."]` — 测试 ID，稳定
+3. `tag[name="..."]` — 适用于 input/select/textarea
+4. `tag[aria-label="..."]` — 适用于无文字的图标按钮
+5. `div:nth-of-type(2) > button` — 路径选择器，最脆弱
+
+⚠️ **直接使用 snapshot 返回的 `selector` 字段**，不要自己拼写选择器。
+❌ 不要用纯 `div`、`span` 等无语义选择器。
 
 ---
 
@@ -198,6 +264,9 @@ curl -s -X POST http://127.0.0.1:18790/eval \
 
 # 后退
 curl -s -X POST http://127.0.0.1:18790/back
+
+# 前进
+curl -s -X POST http://127.0.0.1:18790/forward
 
 # 快速看当前页
 curl -s http://127.0.0.1:18790/page-info
