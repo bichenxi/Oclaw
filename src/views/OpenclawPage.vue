@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
+import { listen } from '@tauri-apps/api/event'
 import { useTabsStore } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { useOpenclawStore } from '@/stores/openclaw'
 import {
   checkOpenclawAlive,
   openclawSendV1,
+  openclawSendCompletions,
   type OpenclawV1Params,
 } from '@/api/openclaw'
 
@@ -86,59 +88,25 @@ async function sendTemp() {
   tempError.value = ''
   scrollToBottom()
 
-  const baseUrl = settings.baseUrl || 'http://127.0.0.1:18789'
+  // 占位 assistant 消息
+  tempMessages.value.push({ role: 'assistant', content: '', streaming: true })
 
   try {
-    const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${settings.bearerToken}`,
-      },
-      body: JSON.stringify({
-        model: tempModel.value,
-        messages: [{ role: 'user', content: text }],
-        stream: true,
-        sessionKey: settings.sessionKey || 'main',
-      }),
+    await openclawSendCompletions({
+      base_url: settings.baseUrl || undefined,
+      token: settings.bearerToken || undefined,
+      session_key: settings.sessionKey || undefined,
+      model: tempModel.value,
+      message: text,
     })
-
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => '')
-      throw new Error(`HTTP ${resp.status}${errText ? '：' + errText.slice(0, 200) : ''}`)
-    }
-
-    tempMessages.value.push({ role: 'assistant', content: '', streaming: true })
-    const lastIdx = tempMessages.value.length - 1
-
-    const reader = resp.body!.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    outer: while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-      for (const line of lines) {
-        if (!line.startsWith('data:')) continue
-        const data = line.slice(5).trim()
-        if (data === '[DONE]') break outer
-        try {
-          const chunk = JSON.parse(data)
-          const delta = chunk.choices?.[0]?.delta?.content
-          if (delta) {
-            tempMessages.value[lastIdx].content += delta
-            scrollToBottom()
-          }
-        } catch { /* 忽略非 JSON 行 */ }
-      }
-    }
-    tempMessages.value[lastIdx].streaming = false
+    // 流式内容由 temp-stream-item 事件驱动，temp-stream-done 时结束
   } catch (e: any) {
     tempError.value = e?.message ?? String(e)
-  } finally {
+    const last = tempMessages.value[tempMessages.value.length - 1]
+    if (last?.role === 'assistant' && last.streaming) {
+      if (!last.content) tempMessages.value.pop()
+      else last.streaming = false
+    }
     tempSending.value = false
   }
 }
@@ -159,7 +127,27 @@ onMounted(() => {
   refreshStatus()
   scrollToBottom()
   const timer = setInterval(refreshStatus, 5000)
-  onUnmounted(() => clearInterval(timer))
+
+  // 临时会话流式事件
+  const unlisteners: Array<() => void> = []
+  listen<{ text: string }>('temp-stream-item', (e) => {
+    const last = tempMessages.value[tempMessages.value.length - 1]
+    if (last?.role === 'assistant' && last.streaming) {
+      last.content += e.payload.text
+      scrollToBottom()
+    }
+  }).then(fn => unlisteners.push(fn))
+
+  listen('temp-stream-done', () => {
+    const last = tempMessages.value[tempMessages.value.length - 1]
+    if (last?.role === 'assistant' && last.streaming) last.streaming = false
+    tempSending.value = false
+  }).then(fn => unlisteners.push(fn))
+
+  onUnmounted(() => {
+    clearInterval(timer)
+    unlisteners.forEach(fn => fn())
+  })
 })
 
 watch(messages, scrollToBottom, { deep: true })

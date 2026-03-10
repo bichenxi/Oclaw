@@ -35,7 +35,21 @@ export async function isOpenclawProcessRunning(): Promise<boolean> {
   return invoke<boolean>('is_openclaw_running')
 }
 
-/** OpenClaw HTTP API /v1/responses 参数 */
+/** 临时会话参数（单条消息，不携带历史） */
+export interface OpenclawCompletionsParams {
+  base_url?: string
+  token?: string
+  session_key?: string
+  model?: string
+  message: string
+}
+
+/** 临时会话：POST /v1/chat/completions，流式结果通过 temp-stream-item / temp-stream-done 事件推送 */
+export async function openclawSendCompletions(params: OpenclawCompletionsParams): Promise<void> {
+  await invoke('openclaw_send_completions', { params })
+}
+
+
 export interface OpenclawV1Params {
   base_url?: string
   token?: string

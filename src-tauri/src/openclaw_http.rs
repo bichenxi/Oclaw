@@ -78,6 +78,118 @@ fn parse_sse_data(event_type: &str, data: &str) -> Option<(&'static str, String)
 }
 
 #[derive(Debug, Deserialize)]
+pub struct OpenclawCompletionsParams {
+    #[serde(default)]
+    pub base_url: Option<String>,
+    pub token: Option<String>,
+    #[serde(default)]
+    pub session_key: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    /// 单条用户消息（临时会话只发当前消息，不携带历史）
+    pub message: String,
+}
+
+/// 临时会话：POST /v1/chat/completions，流式结果通过 temp-stream-item / temp-stream-done 推送。
+#[tauri::command]
+pub async fn openclaw_send_completions(
+    app: AppHandle,
+    params: OpenclawCompletionsParams,
+) -> Result<(), String> {
+    let base = params
+        .base_url
+        .unwrap_or_else(|| DEFAULT_API_BASE.to_string());
+    let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+
+    let token = params
+        .token
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .or_else(|| {
+            std::env::var("OPENCLAW_BEARER_TOKEN")
+                .ok()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+        })
+        .ok_or("缺少 token：请传入 token 或设置环境变量 OPENCLAW_BEARER_TOKEN")?;
+
+    let session_key = params
+        .session_key
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "main".to_string());
+
+    let model = params
+        .model
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| "minimax-cn/MiniMax-M2.5".to_string());
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{ "role": "user", "content": params.message }],
+        "stream": true,
+        "sessionKey": session_key,
+    });
+
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let err_body = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, err_body));
+    }
+
+    // 复用 SSE 解析逻辑，但发 temp-stream-item 事件
+    let mut byte_buf = Vec::<u8>::new();
+    let mut current_event_type = String::new();
+    let mut byte_stream = response.bytes_stream();
+
+    while let Some(chunk) = byte_stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        byte_buf.extend_from_slice(&chunk);
+
+        while let Some(pos) = byte_buf.iter().position(|&b| b == b'\n') {
+            let raw = byte_buf.drain(..=pos).collect::<Vec<_>>();
+            let line = String::from_utf8_lossy(&raw).trim_end_matches('\r').trim().to_string();
+
+            if line.is_empty() {
+                current_event_type.clear();
+            } else if let Some(ev) = line.strip_prefix("event:") {
+                current_event_type = ev.trim().to_string();
+            } else if let Some(data) = line.strip_prefix("data:") {
+                if let Some((_msg_type, text)) = parse_sse_data(&current_event_type, data) {
+                    let _ = app.emit("temp-stream-item", serde_json::json!({ "text": text }));
+                }
+            }
+        }
+    }
+
+    if !byte_buf.is_empty() {
+        let line = String::from_utf8_lossy(&byte_buf).trim().to_string();
+        if let Some(data) = line.strip_prefix("data:") {
+            if let Some((_msg_type, text)) = parse_sse_data(&current_event_type, data) {
+                let _ = app.emit("temp-stream-item", serde_json::json!({ "text": text }));
+            }
+        }
+    }
+
+    let _ = app.emit("temp-stream-done", serde_json::Value::Null);
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
 pub struct OpenclawV1Params {
     #[serde(default)]
     pub base_url: Option<String>,
