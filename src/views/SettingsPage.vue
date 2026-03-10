@@ -50,6 +50,10 @@ async function fetchGatewayToken() {
   fetchTokenError.value = ''
   try {
     tokenInput.value = await getOpenclawGatewayToken()
+    // 获取成功说明 18789 在线，Base URL 为空时填入默认值
+    if (!baseUrlInput.value.trim()) {
+      baseUrlInput.value = 'http://127.0.0.1:18789'
+    }
   } catch (e: any) {
     fetchTokenError.value = e?.message ?? String(e)
   } finally {
