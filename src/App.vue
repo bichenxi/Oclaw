@@ -14,6 +14,19 @@ const onResize = useDebounceFn(() => {
 
 let unlistenApiOpenTab: (() => void) | null = null
 
+let alivePoller: ReturnType<typeof setInterval> | null = null
+
+async function detectAndRedirect() {
+  // 安装进行中不检测，避免干扰
+  if (installerStore.installing) return
+  const alive = await checkOpenclawAlive().catch(() => false)
+  if (!alive && store.specialView !== 'setup') {
+    const installed = await checkOpenclawInstalled().catch(() => false)
+    installerStore.isInstalled = installed
+    store.switchToSpecialView('setup')
+  }
+}
+
 onMounted(async () => {
   window.addEventListener('resize', onResize)
   listen<{ url: string }>('api_open_tab', (e) => {
@@ -22,18 +35,17 @@ onMounted(async () => {
     unlistenApiOpenTab = fn
   }).catch(() => {})
 
-  // 三态检测：running / installed-not-running / not-installed
-  const alive = await checkOpenclawAlive().catch(() => false)
-  if (!alive) {
-    const installed = await checkOpenclawInstalled().catch(() => false)
-    installerStore.isInstalled = installed
-    store.switchToSpecialView('setup')
-  }
+  // 启动时立即检测
+  await detectAndRedirect()
+
+  // 每 8 秒持续检测，离线时立刻跳转
+  alivePoller = setInterval(detectAndRedirect, 8000)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', onResize)
   unlistenApiOpenTab?.()
+  if (alivePoller) clearInterval(alivePoller)
 })
 </script>
 
