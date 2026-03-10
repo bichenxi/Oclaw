@@ -118,17 +118,9 @@ function copyCommand() {
         仍未检测到 OpenClaw，请确认命令已执行完毕。
       </p>
 
-      <div class="flex gap-3">
-        <button class="btn" :disabled="checking" @click="handleCheckAlive">
-          {{ checking ? '检测中...' : '我已启动，检测连接' }}
-        </button>
-        <button
-          class="btn-plain"
-          @click="() => { installerStore.isInstalled = false }"
-        >
-          重新安装
-        </button>
-      </div>
+      <button class="btn" :disabled="checking" @click="handleCheckAlive">
+        {{ checking ? '检测中...' : '我已启动，检测连接' }}
+      </button>
     </template>
 
     <!-- ── 安装向导 ── -->
