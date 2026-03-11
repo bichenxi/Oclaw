@@ -1,12 +1,16 @@
 //! OpenClaw 安装流程
 //!
-//! 安装策略：
-//! 1. 通过登录 shell 检测系统是否已有 Node.js >= 22
-//!    ├ 有 → 直接用系统 npm install -g openclaw（无需 fnm）
-//!    └ 无 → 用 fnm sidecar 安装 Node 22，再 npm install -g openclaw；
-//!            安装完成后尝试将 openclaw 软链到 /usr/local/bin 或 ~/.local/bin
-//! 2. openclaw onboard 为交互式 TUI，无法在 app 内自动化。
-//!    npm 安装完成后发送 installer:need-onboard 事件，由前端引导用户手动在终端执行。
+//! 检测优先级（从上到下，第一个满足的策略生效）：
+//!
+//! 1. 系统已有 node >= 22        → 直接用系统 npm install -g openclaw
+//! 2. 系统已有 fnm（登录 shell 可见）→ 用系统 fnm install 22，再 fnm exec npm install
+//! 3. 系统已有 nvm（~/.nvm/nvm.sh 存在）→ 用系统 nvm install 22，再 nvm exec npm install
+//! 4. 以上均无                   → 使用 app 内置 fnm（独立隔离目录，不影响用户环境）
+//!
+//! 注意：
+//! - 策略 2/3/4 安装完 openclaw 后，会尝试将二进制软链到 /usr/local/bin 或 ~/.local/bin，
+//!   确保用户终端能直接执行 `openclaw onboard`。
+//! - openclaw onboard 是交互式 TUI，无法在 app 内自动化，安装完成后由 UI 引导用户手动执行。
 
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
@@ -31,79 +35,95 @@ impl Default for InstallerState {
 // ─── 事件 Payload ──────────────────────────────────────────────────────────
 
 #[derive(Clone, serde::Serialize)]
-struct StepPayload {
-    step: String,
-    status: String,
-}
+struct StepPayload { step: String, status: String }
 
 #[derive(Clone, serde::Serialize)]
-struct LogPayload {
-    line: String,
-}
+struct LogPayload { line: String }
 
 #[derive(Clone, serde::Serialize)]
-struct ErrorPayload {
-    step: String,
-    message: String,
-}
-
-// ─── emit helpers ──────────────────────────────────────────────────────────
+struct ErrorPayload { step: String, message: String }
 
 fn emit_step(app: &AppHandle, step: &str, status: &str) {
-    let _ = app.emit(
-        "installer:step",
-        StepPayload { step: step.to_string(), status: status.to_string() },
-    );
+    let _ = app.emit("installer:step", StepPayload { step: step.into(), status: status.into() });
 }
-
 fn emit_log(app: &AppHandle, line: &str) {
-    let _ = app.emit("installer:log", LogPayload { line: line.to_string() });
+    let _ = app.emit("installer:log", LogPayload { line: line.into() });
 }
-
 fn emit_error(app: &AppHandle, step: &str, message: &str) {
-    let _ = app.emit(
-        "installer:error",
-        ErrorPayload { step: step.to_string(), message: message.to_string() },
-    );
+    let _ = app.emit("installer:error", ErrorPayload { step: step.into(), message: message.into() });
 }
 
-// ─── 系统检测 ──────────────────────────────────────────────────────────────
+// ─── 环境检测 ──────────────────────────────────────────────────────────────
 
-/// 返回最合适的登录 shell 路径（$SHELL → zsh → bash → sh）
+/// Node.js 安装策略
+#[derive(Debug)]
+enum NodeStrategy {
+    /// 系统已有 node >= 22，直接用系统 npm
+    SystemNode(u32),
+    /// 系统已安装 fnm（登录 shell 可见），用系统 fnm 管理 node 22
+    SystemFnm,
+    /// 系统已安装 nvm（~/.nvm/nvm.sh 存在），用 nvm 管理 node 22
+    SystemNvm,
+    /// 无版本管理工具，使用 app 内置 fnm（独立隔离目录）
+    BundledFnm,
+}
+
+/// 返回最合适的登录 shell（$SHELL → zsh → bash → sh）
 fn detect_login_shell() -> String {
     if let Ok(s) = std::env::var("SHELL") {
-        if std::path::Path::new(&s).exists() {
-            return s;
-        }
+        if std::path::Path::new(&s).exists() { return s; }
     }
     for sh in &["/bin/zsh", "/bin/bash", "/bin/sh"] {
-        if std::path::Path::new(sh).exists() {
-            return sh.to_string();
-        }
+        if std::path::Path::new(sh).exists() { return sh.to_string(); }
     }
     "/bin/sh".to_string()
 }
 
-/// 通过登录 shell 检测 node major 版本。返回 None 表示未安装或无法检测。
+/// 通过登录 shell 检测 node major 版本，返回 None 表示未安装或无法检测。
 fn detect_system_node_major() -> Option<u32> {
     let shell = detect_login_shell();
-    let output = std::process::Command::new(&shell)
+    let out = std::process::Command::new(&shell)
         .args(["-l", "-c", "node --version"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&output.stdout);
+        .output().ok()?;
+    if !out.status.success() { return None; }
+    let s = String::from_utf8_lossy(&out.stdout);
     let trimmed = s.trim().trim_start_matches('v');
-    let major_str = trimmed.split('.').next()?;
-    major_str.parse::<u32>().ok()
+    trimmed.split('.').next()?.parse::<u32>().ok()
 }
 
-// ─── 运行命令并流式输出 ────────────────────────────────────────────────────
+/// 通过登录 shell 检测 fnm 是否可用（binary 在 PATH 中）
+fn detect_system_fnm() -> bool {
+    let shell = detect_login_shell();
+    std::process::Command::new(&shell)
+        .args(["-l", "-c", "fnm --version"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
 
-/// 用登录 shell 运行单条命令，实时推送 stdout/stderr 到前端。
-/// Unix 用 `$SHELL -l -c`，Windows 用 `cmd /C`。
+/// 综合检测，返回最合适的安装策略
+fn detect_node_strategy(home_dir: &std::path::Path) -> NodeStrategy {
+    // 1. node >= 22？
+    if let Some(major) = detect_system_node_major() {
+        if major >= 22 {
+            return NodeStrategy::SystemNode(major);
+        }
+    }
+    // 2. 系统 fnm？
+    if detect_system_fnm() {
+        return NodeStrategy::SystemFnm;
+    }
+    // 3. 系统 nvm？
+    if home_dir.join(".nvm").join("nvm.sh").exists() {
+        return NodeStrategy::SystemNvm;
+    }
+    // 4. 兜底：内置 fnm
+    NodeStrategy::BundledFnm
+}
+
+// ─── 命令执行（流式输出）─────────────────────────────────────────────────────
+
+/// 通过登录 shell 运行命令，实时推送 stdout/stderr 到前端。
 async fn run_login_shell_step(
     app: &AppHandle,
     cmd_str: &str,
@@ -118,60 +138,44 @@ async fn run_login_shell_step(
         let shell = detect_login_shell();
         Command::new(&shell)
             .args(["-l", "-c", cmd_str])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("启动命令失败：{}", e))?
+            .stdout(Stdio::piped()).stderr(Stdio::piped())
+            .spawn().map_err(|e| format!("启动命令失败：{}", e))?
     };
 
     #[cfg(target_os = "windows")]
     let mut child = Command::new("cmd")
         .args(["/C", cmd_str])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("启动命令失败：{}", e))?;
+        .stdout(Stdio::piped()).stderr(Stdio::piped())
+        .spawn().map_err(|e| format!("启动命令失败：{}", e))?;
 
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-    let mut out_lines = BufReader::new(stdout).lines();
-    let mut err_lines = BufReader::new(stderr).lines();
-    let mut out_done = false;
-    let mut err_done = false;
+    let mut out = BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut err = BufReader::new(child.stderr.take().unwrap()).lines();
+    let (mut out_done, mut err_done) = (false, false);
 
     loop {
-        if out_done && err_done {
-            break;
-        }
+        if out_done && err_done { break; }
         tokio::select! {
             _ = &mut *cancel_rx => {
                 let _ = child.kill().await;
                 return Err("已取消".to_string());
             }
-            line = out_lines.next_line(), if !out_done => {
-                match line {
-                    Ok(Some(l)) => emit_log(app, &l),
-                    _ => out_done = true,
-                }
-            }
-            line = err_lines.next_line(), if !err_done => {
-                match line {
-                    Ok(Some(l)) => emit_log(app, &l),
-                    _ => err_done = true,
-                }
-            }
+            line = out.next_line(), if !out_done => match line {
+                Ok(Some(l)) => emit_log(app, &l),
+                _ => out_done = true,
+            },
+            line = err.next_line(), if !err_done => match line {
+                Ok(Some(l)) => emit_log(app, &l),
+                _ => err_done = true,
+            },
         }
     }
 
     let status = child.wait().await.map_err(|e| e.to_string())?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("进程退出码 {}", status.code().unwrap_or(-1)))
-    }
+    if status.success() { Ok(()) }
+    else { Err(format!("进程退出码 {}", status.code().unwrap_or(-1))) }
 }
 
-/// 用 fnm sidecar 运行命令，实时推送 stdout/stderr 到前端。
+/// 用 app 内置 fnm sidecar 运行命令，实时推送 stdout/stderr 到前端。
 async fn run_step(
     app: &AppHandle,
     fnm_dir: &str,
@@ -180,11 +184,8 @@ async fn run_step(
 ) -> Result<(), String> {
     use tauri_plugin_shell::process::CommandEvent;
 
-    let shell = app.shell();
-    let mut cmd = shell.sidecar("fnm").map_err(|e| e.to_string())?;
-    cmd = cmd.args(["--fnm-dir", fnm_dir]);
-    cmd = cmd.args(args);
-
+    let mut cmd = app.shell().sidecar("fnm").map_err(|e| e.to_string())?;
+    cmd = cmd.args(["--fnm-dir", fnm_dir]).args(args);
     let (mut rx, child) = cmd.spawn().map_err(|e| e.to_string())?;
 
     loop {
@@ -193,98 +194,124 @@ async fn run_step(
                 let _ = child.kill();
                 return Err("已取消".to_string());
             }
-            maybe_event = rx.recv() => {
-                match maybe_event {
-                    Some(CommandEvent::Stdout(bytes)) => {
-                        emit_log(app, String::from_utf8_lossy(&bytes).trim_end());
-                    }
-                    Some(CommandEvent::Stderr(bytes)) => {
-                        emit_log(app, String::from_utf8_lossy(&bytes).trim_end());
-                    }
-                    Some(CommandEvent::Terminated(payload)) => {
-                        let code = payload.code.unwrap_or(-1);
-                        return if code == 0 { Ok(()) } else { Err(format!("进程退出码 {}", code)) };
-                    }
-                    Some(_) => {}
-                    None => return Ok(()),
+            ev = rx.recv() => match ev {
+                Some(CommandEvent::Stdout(b)) => emit_log(app, String::from_utf8_lossy(&b).trim_end()),
+                Some(CommandEvent::Stderr(b)) => emit_log(app, String::from_utf8_lossy(&b).trim_end()),
+                Some(CommandEvent::Terminated(p)) => {
+                    let code = p.code.unwrap_or(-1);
+                    return if code == 0 { Ok(()) } else { Err(format!("进程退出码 {}", code)) };
                 }
+                Some(_) => {}
+                None => return Ok(()),
             }
         }
     }
 }
 
-// ─── fnm 路径辅助 ──────────────────────────────────────────────────────────
+// ─── 软链辅助 ──────────────────────────────────────────────────────────────
 
-/// 在 fnm 目录下查找 Node 22 安装目录内的 openclaw 二进制。
+/// 将 src 软链到 /usr/local/bin/openclaw，失败则回退 ~/.local/bin/openclaw。
 #[cfg(not(target_os = "windows"))]
-fn find_fnm_openclaw_binary(fnm_dir: &str) -> Option<std::path::PathBuf> {
-    let node_versions = std::path::Path::new(fnm_dir).join("node-versions");
-    let v22_dir = std::fs::read_dir(&node_versions)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.starts_with("v22."))
-                .unwrap_or(false)
-        })
-        .next()?;
-    let bin = v22_dir.join("installation").join("bin").join("openclaw");
-    if bin.exists() { Some(bin) } else { None }
-}
-
-/// 将 fnm 中的 openclaw 软链到全局 PATH 可访问的位置。
-/// 优先 /usr/local/bin，其次 ~/.local/bin。
-#[cfg(not(target_os = "windows"))]
-fn try_create_openclaw_symlink(app: &AppHandle, fnm_dir: &str, home_dir: &std::path::Path) {
-    let src = match find_fnm_openclaw_binary(fnm_dir) {
-        Some(p) => p,
-        None => {
-            emit_log(app, "⚠  未找到 fnm 目录中的 openclaw 二进制，请确认 npm 安装成功。");
-            return;
-        }
-    };
-
-    // 尝试 /usr/local/bin
+fn do_symlink(app: &AppHandle, src: &std::path::Path, home_dir: &std::path::Path) {
+    // 目标 1：/usr/local/bin（Homebrew 用户通常有写权限）
     let dest1 = std::path::Path::new("/usr/local/bin/openclaw");
     let _ = std::fs::remove_file(dest1);
-    if std::os::unix::fs::symlink(&src, dest1).is_ok() {
-        emit_log(app, "已将 openclaw 软链到 /usr/local/bin/openclaw，终端可直接使用。");
+    if std::os::unix::fs::symlink(src, dest1).is_ok() {
+        emit_log(app, &format!("已将 openclaw 软链到 /usr/local/bin/openclaw"));
         return;
     }
-
-    // 回退 ~/.local/bin
+    // 目标 2：~/.local/bin
     let local_bin = home_dir.join(".local").join("bin");
     let _ = std::fs::create_dir_all(&local_bin);
     let dest2 = local_bin.join("openclaw");
     let _ = std::fs::remove_file(&dest2);
-    if std::os::unix::fs::symlink(&src, &dest2).is_ok() {
+    if std::os::unix::fs::symlink(src, &dest2).is_ok() {
         emit_log(app, &format!(
-            "已将 openclaw 软链到 {}。\n\
-             若终端提示找不到命令，请在 ~/.zshrc 或 ~/.bash_profile 中添加：\n\
+            "已将 openclaw 软链到 {}\n\
+             若终端找不到命令，请在 ~/.zshrc 或 ~/.bash_profile 中添加：\n\
              export PATH=\"$HOME/.local/bin:$PATH\"",
             dest2.display()
         ));
         return;
     }
-
     emit_log(app, &format!(
-        "⚠  无法自动将 openclaw 添加到 PATH。\n\
-         二进制位于：{}\n\
-         可手动执行：sudo ln -sf {} /usr/local/bin/openclaw",
+        "⚠ 无法自动添加到 PATH，openclaw 位于：{}\n\
+         可手动执行：sudo ln -sf '{}' /usr/local/bin/openclaw",
         src.display(), src.display()
     ));
 }
 
-#[cfg(target_os = "windows")]
-fn try_create_openclaw_symlink(_app: &AppHandle, _fnm_dir: &str, _home_dir: &std::path::Path) {
-    // Windows: npm global bin 通常已在 PATH 中，无需额外处理
+/// 用 shell 执行 which_cmd 找到 openclaw 路径，若不在全局 PATH 则尝试软链。
+#[cfg(not(target_os = "windows"))]
+fn try_symlink_from_which(app: &AppHandle, which_cmd: &str, home_dir: &std::path::Path) {
+    let shell = detect_login_shell();
+    let output = std::process::Command::new(&shell)
+        .args(["-l", "-c", which_cmd])
+        .output();
+
+    let src = match output {
+        Ok(o) if o.status.success() => {
+            let p = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if p.is_empty() { None } else { Some(std::path::PathBuf::from(p)) }
+        }
+        _ => None,
+    };
+
+    match src {
+        None => {
+            emit_log(app, "⚠ 无法定位 openclaw 二进制，请确认安装成功后手动添加到 PATH。");
+        }
+        Some(path) => {
+            // 已在常见全局 PATH 目录，无需软链
+            let is_global = ["/usr/local/bin", "/usr/bin", "/opt/homebrew/bin"]
+                .iter()
+                .any(|p| path.starts_with(p));
+            if is_global {
+                emit_log(app, &format!("openclaw 已在 {}，终端可直接使用。", path.display()));
+            } else {
+                emit_log(app, &format!("openclaw 位于 {}，尝试软链到全局 PATH...", path.display()));
+                do_symlink(app, &path, home_dir);
+            }
+        }
+    }
 }
+
+/// 在内置 fnm 目录中查找 openclaw 二进制并软链。
+#[cfg(not(target_os = "windows"))]
+fn try_symlink_bundled_fnm(app: &AppHandle, fnm_dir: &str, home_dir: &std::path::Path) {
+    let node_versions = std::path::Path::new(fnm_dir).join("node-versions");
+    let bin = std::fs::read_dir(&node_versions)
+        .ok()
+        .and_then(|mut rd| {
+            rd.find(|e| {
+                e.as_ref().ok()
+                    .and_then(|e| e.file_name().into_string().ok())
+                    .map(|n| n.starts_with("v22."))
+                    .unwrap_or(false)
+            })
+        })
+        .and_then(|e| e.ok())
+        .map(|e| e.path().join("installation").join("bin").join("openclaw"))
+        .filter(|p| p.exists());
+
+    match bin {
+        Some(src) => {
+            emit_log(app, &format!("openclaw 位于 {}（内置 fnm 目录），尝试软链到全局 PATH...", src.display()));
+            do_symlink(app, &src, home_dir);
+        }
+        None => {
+            emit_log(app, "⚠ 未在内置 fnm 目录中找到 openclaw 二进制，请确认 npm 安装成功。");
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn try_symlink_from_which(_: &AppHandle, _: &str, _: &std::path::Path) {}
+#[cfg(target_os = "windows")]
+fn try_symlink_bundled_fnm(_: &AppHandle, _: &str, _: &std::path::Path) {}
 
 // ─── 安装标记文件 ──────────────────────────────────────────────────────────
 
-/// 写入安装完成标记（openclaw npm 包已安装，但可能未 onboard）
 fn write_installed_marker(app: &AppHandle) {
     if let Ok(dir) = app.path().app_data_dir() {
         let _ = std::fs::create_dir_all(&dir);
@@ -300,37 +327,54 @@ async fn run_install_steps(
     cancel_rx: &mut tokio::sync::oneshot::Receiver<()>,
 ) -> Result<(), String> {
     let home_dir = app.path().home_dir().map_err(|e| e.to_string())?;
+    let nvm_sh = home_dir.join(".nvm").join("nvm.sh");
 
-    // ── 步骤 1：确保 Node.js ─────────────────────────────────────────────────
-    let step1 = "install-node";
-    let node_major = detect_system_node_major();
-    let use_system_node = node_major.map_or(false, |v| v >= 22);
+    let strategy = detect_node_strategy(&home_dir);
 
-    if use_system_node {
-        emit_step(app, step1, "running");
-        emit_log(app, &format!(
-            "检测到系统已安装 Node.js v{}（>= 22），跳过 fnm 安装。",
-            node_major.unwrap()
-        ));
-        emit_step(app, step1, "done");
-    } else {
-        emit_step(app, step1, "running");
-        if let Some(v) = node_major {
-            emit_log(app, &format!(
-                "检测到系统 Node.js v{} < 22，将通过内置 fnm 安装 Node.js 22...", v
-            ));
-        } else {
-            emit_log(app, "未检测到系统 Node.js，将通过内置 fnm 安装 Node.js 22（首次下载约需 1~2 分钟）...");
+    // ── 检测结果日志 ──────────────────────────────────────────────────────────
+    match &strategy {
+        NodeStrategy::SystemNode(v) =>
+            emit_log(app, &format!("检测到系统 Node.js v{}（>= 22），将直接使用系统 npm 安装。", v)),
+        NodeStrategy::SystemFnm =>
+            emit_log(app, "检测到系统已安装 fnm，将使用系统 fnm 安装 Node.js 22（不修改当前默认 node 版本）。"),
+        NodeStrategy::SystemNvm =>
+            emit_log(app, "检测到系统已安装 nvm，将使用系统 nvm 安装 Node.js 22（不修改当前默认 node 版本）。"),
+        NodeStrategy::BundledFnm => {
+            emit_log(app, "未检测到系统 node 版本管理工具，将使用应用内置 fnm（独立隔离目录）安装 Node.js 22。");
+            emit_log(app, &format!("内置 fnm 目录：{}", fnm_dir));
+            emit_log(app, "注意：此模式下在终端执行 `fnm ls` 不会显示这里安装的 node 版本，这是正常现象。");
         }
-        // 注意：app 内置 fnm 使用独立数据目录，与系统已有的 fnm 完全隔离。
-        // 安装完成后 `fnm ls` 不会显示这里安装的版本，这是正常现象。
-        emit_log(app, &format!("Node.js 将安装到应用专属目录：{}", fnm_dir));
-        match run_step(app, fnm_dir, &["install", "22"], cancel_rx).await {
-            Ok(()) => emit_step(app, step1, "done"),
-            Err(e) => {
-                emit_step(app, step1, "error");
-                emit_error(app, step1, &e);
-                return Err(e);
+    }
+
+    // ── 步骤 1：确保 Node.js 22 可用 ─────────────────────────────────────────
+    let step1 = "install-node";
+    emit_step(app, step1, "running");
+
+    match &strategy {
+        NodeStrategy::SystemNode(v) => {
+            emit_log(app, &format!("系统 Node.js v{} 满足要求（>= 22），跳过安装。", v));
+            emit_step(app, step1, "done");
+        }
+        NodeStrategy::SystemFnm => {
+            emit_log(app, "正在通过系统 fnm 安装 Node.js 22...");
+            match run_login_shell_step(app, "fnm install 22", cancel_rx).await {
+                Ok(()) => emit_step(app, step1, "done"),
+                Err(e) => { emit_step(app, step1, "error"); emit_error(app, step1, &e); return Err(e); }
+            }
+        }
+        NodeStrategy::SystemNvm => {
+            emit_log(app, "正在通过系统 nvm 安装 Node.js 22...");
+            let cmd = format!("source '{}' && nvm install 22", nvm_sh.display());
+            match run_login_shell_step(app, &cmd, cancel_rx).await {
+                Ok(()) => emit_step(app, step1, "done"),
+                Err(e) => { emit_step(app, step1, "error"); emit_error(app, step1, &e); return Err(e); }
+            }
+        }
+        NodeStrategy::BundledFnm => {
+            emit_log(app, "正在通过内置 fnm 安装 Node.js 22（首次下载约需 1~2 分钟）...");
+            match run_step(app, fnm_dir, &["install", "22"], cancel_rx).await {
+                Ok(()) => emit_step(app, step1, "done"),
+                Err(e) => { emit_step(app, step1, "error"); emit_error(app, step1, &e); return Err(e); }
             }
         }
     }
@@ -338,47 +382,50 @@ async fn run_install_steps(
     // ── 步骤 2：npm install -g openclaw ──────────────────────────────────────
     let step2 = "install-openclaw";
     emit_step(app, step2, "running");
-    if use_system_node {
-        emit_log(app, "通过系统 npm 全局安装 openclaw（openclaw 将进入系统 npm global bin，终端可直接使用）...");
-    } else {
-        emit_log(app, "通过内置 fnm 的 Node 22 全局安装 openclaw...");
-        emit_log(app, "（安装路径在应用专属目录内，稍后会自动软链到系统 PATH）");
-    }
+    emit_log(app, "正在通过 npm 全局安装 openclaw，请稍候...");
 
-    let install_result = if use_system_node {
-        run_login_shell_step(app, "npm install -g openclaw", cancel_rx).await
-    } else {
-        run_step(
-            app, fnm_dir,
-            &["exec", "--using=22", "--", "npm", "install", "-g", "openclaw"],
-            cancel_rx,
-        ).await
+    let install_result = match &strategy {
+        NodeStrategy::SystemNode(_) =>
+            run_login_shell_step(app, "npm install -g openclaw", cancel_rx).await,
+        NodeStrategy::SystemFnm =>
+            run_login_shell_step(app, "fnm exec --using=22 -- npm install -g openclaw", cancel_rx).await,
+        NodeStrategy::SystemNvm => {
+            let cmd = format!("source '{}' && nvm exec 22 npm install -g openclaw", nvm_sh.display());
+            run_login_shell_step(app, &cmd, cancel_rx).await
+        }
+        NodeStrategy::BundledFnm =>
+            run_step(app, fnm_dir, &["exec", "--using=22", "--", "npm", "install", "-g", "openclaw"], cancel_rx).await,
     };
 
     match install_result {
         Ok(()) => emit_step(app, step2, "done"),
-        Err(e) => {
-            emit_step(app, step2, "error");
-            emit_error(app, step2, &e);
-            return Err(e);
+        Err(e) => { emit_step(app, step2, "error"); emit_error(app, step2, &e); return Err(e); }
+    }
+
+    // ── 安装后处理：确保 openclaw 在终端 PATH 中 ─────────────────────────────
+    match &strategy {
+        NodeStrategy::SystemNode(_) => {
+            // 系统 npm global bin 已在 PATH 中，无需额外处理
+        }
+        NodeStrategy::SystemFnm => {
+            try_symlink_from_which(app, "fnm exec --using=22 -- which openclaw", &home_dir);
+        }
+        NodeStrategy::SystemNvm => {
+            let cmd = format!("source '{}' && nvm exec 22 which openclaw", nvm_sh.display());
+            try_symlink_from_which(app, &cmd, &home_dir);
+        }
+        NodeStrategy::BundledFnm => {
+            try_symlink_bundled_fnm(app, fnm_dir, &home_dir);
         }
     }
 
-    // ── 安装后处理 ───────────────────────────────────────────────────────────
-    // 若通过 fnm 安装，尝试将 openclaw 软链到全局 PATH
-    if !use_system_node {
-        try_create_openclaw_symlink(app, fnm_dir, &home_dir);
-    }
-
-    // 写入安装标记，供下次启动检测
     write_installed_marker(app);
 
     emit_log(app, "");
     emit_log(app, "OpenClaw 安装完成！");
     emit_log(app, "下一步：请在终端中运行 openclaw onboard 完成初始化配置。");
-    if !use_system_node {
-        emit_log(app, "提示：若终端提示 openclaw 命令找不到，说明软链未成功，");
-        emit_log(app, "      请参考上方日志手动将 openclaw 添加到 PATH 后再运行。");
+    if !matches!(strategy, NodeStrategy::SystemNode(_)) {
+        emit_log(app, "若终端提示找不到 openclaw 命令，请参考上方软链日志手动处理。");
     }
 
     Ok(())
@@ -392,18 +439,14 @@ pub async fn start_install(app: AppHandle) -> Result<(), String> {
 
     {
         let mut running = state.running.lock().unwrap();
-        if *running {
-            return Err("安装已在进行中".to_string());
-        }
+        if *running { return Err("安装已在进行中".to_string()); }
         *running = true;
     }
 
     let (tx, mut rx) = tokio::sync::oneshot::channel::<()>();
     { *state.cancel_tx.lock().unwrap() = Some(tx); }
 
-    let fnm_dir = app
-        .path()
-        .app_data_dir()
+    let fnm_dir = app.path().app_data_dir()
         .map(|p| p.join("fnm").to_string_lossy().to_string())
         .unwrap_or_else(|_| {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -420,15 +463,8 @@ pub async fn start_install(app: AppHandle) -> Result<(), String> {
         { *cancel_tx2.lock().unwrap() = None; }
 
         match result {
-            Ok(()) => {
-                // npm 安装完成，通知前端引导用户手动运行 openclaw onboard
-                let _ = app2.emit("installer:need-onboard", ());
-            }
-            Err(msg) => {
-                if msg == "已取消" {
-                    emit_log(&app2, "安装已取消。");
-                }
-            }
+            Ok(()) => { let _ = app2.emit("installer:need-onboard", ()); }
+            Err(msg) => { if msg == "已取消" { emit_log(&app2, "安装已取消。"); } }
         }
     });
 
@@ -444,21 +480,15 @@ pub struct OpenclawInstallStatus {
     pub onboarded: bool,
 }
 
-/// 检测 OpenClaw 安装状态。
 #[tauri::command]
 pub fn check_openclaw_installed(app: AppHandle) -> OpenclawInstallStatus {
-    let onboarded = app
-        .path()
-        .home_dir()
+    let onboarded = app.path().home_dir()
         .map(|h| h.join(".openclaw").join("openclaw.json").exists())
         .unwrap_or(false);
 
-    let npm_installed = onboarded
-        || app
-            .path()
-            .app_data_dir()
-            .map(|d| d.join("openclaw-npm-installed.flag").exists())
-            .unwrap_or(false);
+    let npm_installed = onboarded || app.path().app_data_dir()
+        .map(|d| d.join("openclaw-npm-installed.flag").exists())
+        .unwrap_or(false);
 
     OpenclawInstallStatus { npm_installed, onboarded }
 }
@@ -467,8 +497,6 @@ pub fn check_openclaw_installed(app: AppHandle) -> OpenclawInstallStatus {
 pub async fn cancel_install(app: AppHandle) -> Result<(), String> {
     let state = app.try_state::<InstallerState>().ok_or("InstallerState not found")?;
     let mut guard = state.cancel_tx.lock().unwrap();
-    if let Some(tx) = guard.take() {
-        let _ = tx.send(());
-    }
+    if let Some(tx) = guard.take() { let _ = tx.send(()); }
     Ok(())
 }
