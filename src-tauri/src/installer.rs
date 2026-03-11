@@ -317,11 +317,14 @@ async fn run_install_steps(
         emit_step(app, step1, "running");
         if let Some(v) = node_major {
             emit_log(app, &format!(
-                "检测到系统 Node.js v{} < 22，将通过 fnm 安装 Node.js 22...", v
+                "检测到系统 Node.js v{} < 22，将通过内置 fnm 安装 Node.js 22...", v
             ));
         } else {
-            emit_log(app, "未检测到系统 Node.js，将通过 fnm 安装 Node.js 22（首次下载约需 1~2 分钟）...");
+            emit_log(app, "未检测到系统 Node.js，将通过内置 fnm 安装 Node.js 22（首次下载约需 1~2 分钟）...");
         }
+        // 注意：app 内置 fnm 使用独立数据目录，与系统已有的 fnm 完全隔离。
+        // 安装完成后 `fnm ls` 不会显示这里安装的版本，这是正常现象。
+        emit_log(app, &format!("Node.js 将安装到应用专属目录：{}", fnm_dir));
         match run_step(app, fnm_dir, &["install", "22"], cancel_rx).await {
             Ok(()) => emit_step(app, step1, "done"),
             Err(e) => {
@@ -335,7 +338,12 @@ async fn run_install_steps(
     // ── 步骤 2：npm install -g openclaw ──────────────────────────────────────
     let step2 = "install-openclaw";
     emit_step(app, step2, "running");
-    emit_log(app, "正在通过 npm 安装 openclaw，请稍候...");
+    if use_system_node {
+        emit_log(app, "通过系统 npm 全局安装 openclaw（openclaw 将进入系统 npm global bin，终端可直接使用）...");
+    } else {
+        emit_log(app, "通过内置 fnm 的 Node 22 全局安装 openclaw...");
+        emit_log(app, "（安装路径在应用专属目录内，稍后会自动软链到系统 PATH）");
+    }
 
     let install_result = if use_system_node {
         run_login_shell_step(app, "npm install -g openclaw", cancel_rx).await
@@ -368,6 +376,10 @@ async fn run_install_steps(
     emit_log(app, "");
     emit_log(app, "OpenClaw 安装完成！");
     emit_log(app, "下一步：请在终端中运行 openclaw onboard 完成初始化配置。");
+    if !use_system_node {
+        emit_log(app, "提示：若终端提示 openclaw 命令找不到，说明软链未成功，");
+        emit_log(app, "      请参考上方日志手动将 openclaw 添加到 PATH 后再运行。");
+    }
 
     Ok(())
 }
