@@ -123,6 +123,12 @@ fn detect_node_strategy(home_dir: &std::path::Path) -> NodeStrategy {
 
 // ─── 命令执行（流式输出）─────────────────────────────────────────────────────
 
+/// npm notice / npm warn EBADENGINE 等纯噪音行，不向前端显示。
+fn is_npm_noise(line: &str) -> bool {
+    let l = line.trim();
+    l.starts_with("npm notice") || l.starts_with("npm warn EBADENGINE")
+}
+
 /// 通过登录 shell 运行命令，实时推送 stdout/stderr 到前端。
 async fn run_login_shell_step(
     app: &AppHandle,
@@ -160,11 +166,11 @@ async fn run_login_shell_step(
                 return Err("已取消".to_string());
             }
             line = out.next_line(), if !out_done => match line {
-                Ok(Some(l)) => emit_log(app, &l),
+                Ok(Some(l)) => { if !is_npm_noise(&l) { emit_log(app, &l); } }
                 _ => out_done = true,
             },
             line = err.next_line(), if !err_done => match line {
-                Ok(Some(l)) => emit_log(app, &l),
+                Ok(Some(l)) => { if !is_npm_noise(&l) { emit_log(app, &l); } }
                 _ => err_done = true,
             },
         }
@@ -195,8 +201,14 @@ async fn run_step(
                 return Err("已取消".to_string());
             }
             ev = rx.recv() => match ev {
-                Some(CommandEvent::Stdout(b)) => emit_log(app, String::from_utf8_lossy(&b).trim_end()),
-                Some(CommandEvent::Stderr(b)) => emit_log(app, String::from_utf8_lossy(&b).trim_end()),
+                Some(CommandEvent::Stdout(b)) => {
+                    let l = String::from_utf8_lossy(&b);
+                    if !is_npm_noise(l.trim_end()) { emit_log(app, l.trim_end()); }
+                }
+                Some(CommandEvent::Stderr(b)) => {
+                    let l = String::from_utf8_lossy(&b);
+                    if !is_npm_noise(l.trim_end()) { emit_log(app, l.trim_end()); }
+                }
                 Some(CommandEvent::Terminated(p)) => {
                     let code = p.code.unwrap_or(-1);
                     return if code == 0 { Ok(()) } else { Err(format!("进程退出码 {}", code)) };
@@ -386,20 +398,30 @@ async fn run_install_steps(
 
     let install_result = match &strategy {
         NodeStrategy::SystemNode(_) =>
-            run_login_shell_step(app, "npm install -g openclaw", cancel_rx).await,
+            run_login_shell_step(app, "npm install -g openclaw --no-update-notifier --no-fund", cancel_rx).await,
         NodeStrategy::SystemFnm =>
-            run_login_shell_step(app, "fnm exec --using=22 -- npm install -g openclaw", cancel_rx).await,
+            run_login_shell_step(app, "fnm exec --using=22 -- npm install -g openclaw --no-update-notifier --no-fund", cancel_rx).await,
         NodeStrategy::SystemNvm => {
-            let cmd = format!("source '{}' && nvm exec 22 npm install -g openclaw", nvm_sh.display());
+            let cmd = format!("source '{}' && nvm exec 22 npm install -g openclaw --no-update-notifier --no-fund", nvm_sh.display());
             run_login_shell_step(app, &cmd, cancel_rx).await
         }
         NodeStrategy::BundledFnm =>
-            run_step(app, fnm_dir, &["exec", "--using=22", "--", "npm", "install", "-g", "openclaw"], cancel_rx).await,
+            run_step(app, fnm_dir, &["exec", "--using=22", "--", "npm", "install", "-g", "openclaw", "--no-update-notifier", "--no-fund"], cancel_rx).await,
     };
 
     match install_result {
         Ok(()) => emit_step(app, step2, "done"),
-        Err(e) => { emit_step(app, step2, "error"); emit_error(app, step2, &e); return Err(e); }
+        Err(e) => {
+            emit_step(app, step2, "error");
+            emit_log(app, "");
+            emit_log(app, "npm 安装失败，常见原因及解决方法：");
+            emit_log(app, "  1. 网络问题（大陆用户）：可尝试切换 npm 镜像源后重试");
+            emit_log(app, "     npm config set registry https://registry.npmmirror.com");
+            emit_log(app, "  2. 权限问题：尝试在终端手动执行 npm install -g openclaw");
+            emit_log(app, "  3. 详细日志见 ~/.npm/_logs/ 目录下最新的 debug 文件");
+            emit_error(app, step2, &e);
+            return Err(e);
+        }
     }
 
     // ── 安装后处理：确保 openclaw 在终端 PATH 中 ─────────────────────────────
