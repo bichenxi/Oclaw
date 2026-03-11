@@ -8,8 +8,9 @@
 //! 4. 以上均无                   → 使用 app 内置 fnm（独立隔离目录，不影响用户环境）
 //!
 //! 注意：
-//! - 策略 2/3/4 安装完 openclaw 后，会尝试将二进制软链到 /usr/local/bin 或 ~/.local/bin，
-//!   确保用户终端能直接执行 `openclaw onboard`。
+//! - 策略 2/3 安装完 openclaw 后，会尝试将二进制软链到 /usr/local/bin 或 ~/.local/bin。
+//! - 策略 4（内置 fnm）会将 node bin 目录直接写入 shell profile（~/.zshrc），
+//!   使 node、npm、openclaw 等命令在终端中全部可用。
 //! - openclaw onboard 是交互式 TUI，无法在 app 内自动化，安装完成后由 UI 引导用户手动执行。
 
 use std::sync::{Arc, Mutex};
@@ -222,30 +223,74 @@ async fn run_step(
 
 // ─── 软链辅助 ──────────────────────────────────────────────────────────────
 
-/// 将 src 软链到 /usr/local/bin/openclaw，失败则回退 ~/.local/bin/openclaw。
+/// 当 openclaw 被软链到 ~/.local/bin 时，自动将该目录加入 shell profile 的 PATH。
+#[cfg(not(target_os = "windows"))]
+fn ensure_local_bin_in_path(app: &AppHandle, home_dir: &std::path::Path) {
+    use std::io::Write;
+
+    let export_line = r#"export PATH="$HOME/.local/bin:$PATH""#;
+    let shell = detect_login_shell();
+    let profile_name = if shell.contains("zsh") { ".zshrc" } else { ".bash_profile" };
+    let profile = home_dir.join(profile_name);
+
+    if let Ok(content) = std::fs::read_to_string(&profile) {
+        if content.contains(".local/bin") {
+            return;
+        }
+    }
+
+    match std::fs::OpenOptions::new().append(true).create(true).open(&profile) {
+        Ok(mut f) => {
+            if writeln!(f, "\n# Added by Claw Browser\n{}", export_line).is_ok() {
+                emit_log(app, &format!(
+                    "已自动将 ~/.local/bin 添加到 ~/{} 的 PATH 中。",
+                    profile_name
+                ));
+                emit_log(app, "⚠ 请关闭并重新打开终端窗口，使 PATH 配置生效后再执行 openclaw 命令。");
+            }
+        }
+        Err(_) => {
+            emit_log(app, &format!(
+                "⚠ 无法写入 ~/{}，请手动添加：\n{}",
+                profile_name, export_line
+            ));
+        }
+    }
+}
+
+/// 将 src 软链到全局 PATH 目录：
+/// 1. /usr/local/bin（Intel Mac / Homebrew 用户通常有写权限）
+/// 2. /opt/homebrew/bin（Apple Silicon Mac + Homebrew）
+/// 3. ~/.local/bin（兜底，同时自动写入 shell profile）
 #[cfg(not(target_os = "windows"))]
 fn do_symlink(app: &AppHandle, src: &std::path::Path, home_dir: &std::path::Path) {
-    // 目标 1：/usr/local/bin（Homebrew 用户通常有写权限）
     let dest1 = std::path::Path::new("/usr/local/bin/openclaw");
     let _ = std::fs::remove_file(dest1);
     if std::os::unix::fs::symlink(src, dest1).is_ok() {
-        emit_log(app, &format!("已将 openclaw 软链到 /usr/local/bin/openclaw"));
+        emit_log(app, "已将 openclaw 软链到 /usr/local/bin/openclaw");
         return;
     }
-    // 目标 2：~/.local/bin
+
+    let homebrew_bin = std::path::Path::new("/opt/homebrew/bin");
+    if homebrew_bin.is_dir() {
+        let dest2 = homebrew_bin.join("openclaw");
+        let _ = std::fs::remove_file(&dest2);
+        if std::os::unix::fs::symlink(src, &dest2).is_ok() {
+            emit_log(app, &format!("已将 openclaw 软链到 {}", dest2.display()));
+            return;
+        }
+    }
+
     let local_bin = home_dir.join(".local").join("bin");
     let _ = std::fs::create_dir_all(&local_bin);
-    let dest2 = local_bin.join("openclaw");
-    let _ = std::fs::remove_file(&dest2);
-    if std::os::unix::fs::symlink(src, &dest2).is_ok() {
-        emit_log(app, &format!(
-            "已将 openclaw 软链到 {}\n\
-             若终端找不到命令，请在 ~/.zshrc 或 ~/.bash_profile 中添加：\n\
-             export PATH=\"$HOME/.local/bin:$PATH\"",
-            dest2.display()
-        ));
+    let dest3 = local_bin.join("openclaw");
+    let _ = std::fs::remove_file(&dest3);
+    if std::os::unix::fs::symlink(src, &dest3).is_ok() {
+        emit_log(app, &format!("已将 openclaw 软链到 {}", dest3.display()));
+        ensure_local_bin_in_path(app, home_dir);
         return;
     }
+
     emit_log(app, &format!(
         "⚠ 无法自动添加到 PATH，openclaw 位于：{}\n\
          可手动执行：sudo ln -sf '{}' /usr/local/bin/openclaw",
@@ -288,11 +333,13 @@ fn try_symlink_from_which(app: &AppHandle, which_cmd: &str, home_dir: &std::path
     }
 }
 
-/// 在内置 fnm 目录中查找 openclaw 二进制并软链。
+/// BundledFnm 安装后处理：找到内置 fnm 的 node bin 目录，
+/// 将其直接写入 shell profile（~/.zshrc 或 ~/.bash_profile），
+/// 使 node、npm、npx、openclaw 等命令在终端中全部可用。
 #[cfg(not(target_os = "windows"))]
 fn try_symlink_bundled_fnm(app: &AppHandle, fnm_dir: &str, home_dir: &std::path::Path) {
     let node_versions = std::path::Path::new(fnm_dir).join("node-versions");
-    let bin = std::fs::read_dir(&node_versions)
+    let bin_dir = std::fs::read_dir(&node_versions)
         .ok()
         .and_then(|mut rd| {
             rd.find(|e| {
@@ -303,16 +350,57 @@ fn try_symlink_bundled_fnm(app: &AppHandle, fnm_dir: &str, home_dir: &std::path:
             })
         })
         .and_then(|e| e.ok())
-        .map(|e| e.path().join("installation").join("bin").join("openclaw"))
-        .filter(|p| p.exists());
+        .map(|e| e.path().join("installation").join("bin"))
+        .filter(|p| p.join("openclaw").exists());
 
-    match bin {
-        Some(src) => {
-            emit_log(app, &format!("openclaw 位于 {}（内置 fnm 目录），尝试软链到全局 PATH...", src.display()));
-            do_symlink(app, &src, home_dir);
+    match bin_dir {
+        Some(bin) => {
+            emit_log(app, &format!(
+                "内置 fnm Node.js 位于 {}，正在添加到终端 PATH...",
+                bin.display()
+            ));
+            add_node_bin_to_shell_profile(app, &bin, home_dir);
         }
         None => {
             emit_log(app, "⚠ 未在内置 fnm 目录中找到 openclaw 二进制，请确认 npm 安装成功。");
+        }
+    }
+}
+
+/// 将 node bin 目录写入 shell profile，使 node/npm/openclaw 全部可用。
+#[cfg(not(target_os = "windows"))]
+fn add_node_bin_to_shell_profile(app: &AppHandle, node_bin_dir: &std::path::Path, home_dir: &std::path::Path) {
+    use std::io::Write;
+
+    let bin_path_str = node_bin_dir.display().to_string();
+    let export_line = format!(r#"export PATH="{}:$PATH""#, bin_path_str);
+
+    let shell = detect_login_shell();
+    let profile_name = if shell.contains("zsh") { ".zshrc" } else { ".bash_profile" };
+    let profile = home_dir.join(profile_name);
+
+    if let Ok(content) = std::fs::read_to_string(&profile) {
+        if content.contains(&bin_path_str) {
+            emit_log(app, &format!(
+                "~/{} 已包含内置 Node.js PATH 配置，跳过。", profile_name
+            ));
+            return;
+        }
+    }
+
+    match std::fs::OpenOptions::new().append(true).create(true).open(&profile) {
+        Ok(mut f) => {
+            if writeln!(f, "\n# Added by Claw Browser — bundled Node.js\n{}", export_line).is_ok() {
+                emit_log(app, &format!(
+                    "已将内置 Node.js 路径添加到 ~/{} 中。", profile_name
+                ));
+                emit_log(app, "重新打开终端后 node、npm、openclaw 等命令均可使用。");
+            }
+        }
+        Err(_) => {
+            emit_log(app, &format!(
+                "⚠ 无法写入 ~/{}，请手动添加以下内容：\n{}", profile_name, export_line
+            ));
         }
     }
 }
@@ -427,7 +515,7 @@ async fn run_install_steps(
     // ── 安装后处理：确保 openclaw 在终端 PATH 中 ─────────────────────────────
     match &strategy {
         NodeStrategy::SystemNode(_) => {
-            // 系统 npm global bin 已在 PATH 中，无需额外处理
+            try_symlink_from_which(app, "which openclaw", &home_dir);
         }
         NodeStrategy::SystemFnm => {
             try_symlink_from_which(app, "fnm exec --using=22 -- which openclaw", &home_dir);
@@ -443,12 +531,23 @@ async fn run_install_steps(
 
     write_installed_marker(app);
 
+    // ── 最终验证：在登录 shell 中确认 openclaw 可访问 ──────────────────────
+    let shell = detect_login_shell();
+    let verified = std::process::Command::new(&shell)
+        .args(["-l", "-c", "openclaw --version"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
     emit_log(app, "");
     emit_log(app, "OpenClaw 安装完成！");
-    emit_log(app, "下一步：请在终端中运行 openclaw onboard 完成初始化配置。");
-    if !matches!(strategy, NodeStrategy::SystemNode(_)) {
-        emit_log(app, "若终端提示找不到 openclaw 命令，请参考上方软链日志手动处理。");
+    if verified {
+        emit_log(app, "已验证 openclaw 命令可用。");
+    } else {
+        emit_log(app, "⚠ 当前终端环境尚未识别 openclaw 命令。");
+        emit_log(app, "请关闭并重新打开终端窗口（使 PATH 生效），然后执行：");
     }
+    emit_log(app, "下一步：请在终端中运行 openclaw onboard 完成初始化配置。");
 
     Ok(())
 }
