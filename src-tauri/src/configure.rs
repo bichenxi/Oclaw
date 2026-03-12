@@ -124,29 +124,36 @@ pub async fn run_onboard(app: AppHandle, params: OnboardParams) -> Result<(), St
 ///   ┌ = intro          └ = outro     │ = 内容行
 #[derive(Clone, serde::Serialize)]
 pub struct WizardPrompt {
-    /// "confirm" | "select" | "input" | "password" | "info" | "done"
+    /// "confirm" | "select" | "multiselect" | "input" | "password" | "info" | "done"
     pub prompt_type: String,
     pub question: String,
     #[serde(default)]
     pub options: Vec<String>,
     #[serde(default)]
     pub selected: usize,
+    /// 多选模式下的选中索引列表
+    #[serde(default)]
+    pub checked: Vec<usize>,
+    /// 校验错误提示（如 "Please select at least one option"）
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
-fn parse_screen_for_prompt(screen_text: &str) -> Option<WizardPrompt> {
+/// cursor_row: 终端光标所在行号（0-based），由 vt100::Screen::cursor_position() 提供。
+/// 用于精确判定 multiselect / select 中哪个选项处于高亮（光标）状态。
+fn parse_screen_for_prompt(screen_text: &str, cursor_row: u16) -> Option<WizardPrompt> {
     let lines: Vec<&str> = screen_text.lines().collect();
 
     // 检查是否已结束（outro）
     if lines.iter().any(|l| {
         let t = l.trim();
-        t.starts_with('└') || t.starts_with("└")
+        t.starts_with('└')
     }) {
         let outro_text = lines.iter()
             .filter(|l| l.trim().starts_with('└'))
             .map(|l| l.trim().trim_start_matches('└').trim().to_string())
             .collect::<Vec<_>>()
             .join(" ");
-        // 只有当没有活跃 prompt 时才算 done
         let has_active = lines.iter().any(|l| l.trim().starts_with('◆'));
         if !has_active {
             return Some(WizardPrompt {
@@ -154,6 +161,8 @@ fn parse_screen_for_prompt(screen_text: &str) -> Option<WizardPrompt> {
                 question: if outro_text.is_empty() { "完成".to_string() } else { outro_text },
                 options: vec![],
                 selected: 0,
+                checked: vec![],
+                error: None,
             });
         }
     }
@@ -166,15 +175,71 @@ fn parse_screen_for_prompt(screen_text: &str) -> Option<WizardPrompt> {
         .trim()
         .to_string();
 
-    // 收集 prompt 后面的 │ 行
-    let mut body_lines: Vec<String> = Vec::new();
+    // 收集 prompt 后面的 │ 行，同时记录每行在 screen 中的原始行号
+    // (screen_row, content_text)
+    let mut body_entries: Vec<(usize, String)> = Vec::new();
+    let mut error_msg: Option<String> = None;
+
     for i in (prompt_idx + 1)..lines.len() {
         let t = lines[i].trim();
         if t.starts_with('│') {
-            body_lines.push(t.trim_start_matches('│').trim().to_string());
+            let content = t.trim_start_matches('│').trim();
+            if content.to_lowercase().contains("please select") || content.to_lowercase().contains("required") {
+                error_msg = Some(content.to_string());
+            } else {
+                body_entries.push((i, content.to_string()));
+            }
         } else if t.starts_with('└') || t.starts_with('◆') || t.starts_with('◇') {
             break;
         }
+    }
+
+    let body_lines: Vec<String> = body_entries.iter().map(|(_, c)| c.clone()).collect();
+
+    // 判断 multiselect（每行有 ◻ 或 ◼ 或 ☑ 或 ☐）
+    // 保留 screen_row 用于光标位置映射
+    let multi_entries: Vec<(usize, bool, String)> = body_entries.iter()
+        .filter(|(_, c)| c.contains('◻') || c.contains('◼') || c.contains('☐') || c.contains('☑'))
+        .map(|(row, c)| {
+            let is_checked = c.contains('◼') || c.contains('☑');
+            let text = c.replace('◻', "").replace('◼', "").replace('☐', "").replace('☑', "").trim().to_string();
+            (*row, is_checked, text)
+        })
+        .filter(|(_, _, t)| !t.is_empty())
+        .collect();
+
+    if multi_entries.len() >= 2 {
+        let mut checked = Vec::new();
+        let mut options = Vec::new();
+        let mut selected = 0;
+        let cr = cursor_row as usize;
+
+        for (opt_idx, (screen_row, is_checked, text)) in multi_entries.iter().enumerate() {
+            if *is_checked { checked.push(opt_idx); }
+            if *screen_row == cr { selected = opt_idx; }
+            options.push(text.clone());
+        }
+
+        // 如果光标行没精确命中任何选项行（可能差一行），找最近的
+        if selected == 0 && cr > 0 {
+            let mut min_dist = usize::MAX;
+            for (opt_idx, (screen_row, _, _)) in multi_entries.iter().enumerate() {
+                let dist = (*screen_row as isize - cr as isize).unsigned_abs();
+                if dist < min_dist {
+                    min_dist = dist;
+                    selected = opt_idx;
+                }
+            }
+        }
+
+        return Some(WizardPrompt {
+            prompt_type: "multiselect".to_string(),
+            question,
+            options,
+            selected,
+            checked,
+            error: error_msg,
+        });
     }
 
     // 判断 confirm（单行 "○ Yes / ● No" 或 "● Yes / ○ No"）
@@ -190,25 +255,30 @@ fn parse_screen_for_prompt(screen_text: &str) -> Option<WizardPrompt> {
                 question,
                 options: vec!["Yes".to_string(), "No".to_string()],
                 selected,
+                checked: vec![],
+                error: error_msg,
             });
         }
     }
 
     // 判断 select（多行，每行有 ○ 或 ●）
-    let radio_lines: Vec<(bool, String)> = body_lines.iter()
-        .filter(|l| l.contains('●') || l.contains('○'))
-        .map(|l| {
-            let is_sel = l.contains('●');
-            let text = l.replace('●', "").replace('○', "").trim().to_string();
-            (is_sel, text)
+    let radio_entries: Vec<(usize, bool, String)> = body_entries.iter()
+        .filter(|(_, c)| c.contains('●') || c.contains('○'))
+        .map(|(row, c)| {
+            let is_sel = c.contains('●');
+            let text = c.replace('●', "").replace('○', "").trim().to_string();
+            (*row, is_sel, text)
         })
-        .filter(|(_, t)| !t.is_empty())
+        .filter(|(_, _, t)| !t.is_empty())
         .collect();
 
-    if radio_lines.len() >= 2 {
+    if radio_entries.len() >= 2 {
+        let cr = cursor_row as usize;
         let mut selected = 0;
-        let options: Vec<String> = radio_lines.iter().enumerate().map(|(i, (is_sel, text))| {
-            if *is_sel { selected = i; }
+        let options: Vec<String> = radio_entries.iter().enumerate().map(|(i, (row, is_sel, text))| {
+            // 优先用 cursor_row，兜底用 ● 标记
+            if *row == cr { selected = i; }
+            else if *is_sel && selected == 0 { selected = i; }
             text.clone()
         }).collect();
         return Some(WizardPrompt {
@@ -216,6 +286,8 @@ fn parse_screen_for_prompt(screen_text: &str) -> Option<WizardPrompt> {
             question,
             options,
             selected,
+            checked: vec![],
+            error: error_msg,
         });
     }
 
@@ -226,6 +298,8 @@ fn parse_screen_for_prompt(screen_text: &str) -> Option<WizardPrompt> {
             question,
             options: vec![],
             selected: 0,
+            checked: vec![],
+            error: error_msg,
         });
     }
 
@@ -235,6 +309,8 @@ fn parse_screen_for_prompt(screen_text: &str) -> Option<WizardPrompt> {
         question,
         options: vec![],
         selected: 0,
+        checked: vec![],
+        error: error_msg,
     })
 }
 
@@ -396,9 +472,15 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 }
             }
-            let screen_text = parser.screen().contents();
-            if let Some(prompt) = parse_screen_for_prompt(&screen_text) {
-                let prompt_key = format!("{}:{}:{:?}", prompt.prompt_type, prompt.question, prompt.options);
+            let screen = parser.screen();
+            let screen_text = screen.contents();
+            let cursor_row = screen.cursor_position().0;
+            if let Some(prompt) = parse_screen_for_prompt(&screen_text, cursor_row) {
+                let prompt_key = format!(
+                    "{}:{}:{:?}:{}:{:?}:{:?}",
+                    prompt.prompt_type, prompt.question, prompt.options,
+                    prompt.selected, prompt.checked, prompt.error,
+                );
                 if last_prompt.as_deref() != Some(&prompt_key) {
                     last_prompt = Some(prompt_key);
                     let _ = app_emit.emit("wizard:prompt", prompt);
@@ -428,39 +510,49 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 向向导进程发送按键。
-/// action 格式：
-///   "enter"        → 回车
-///   "up" / "down" / "left" / "right" → 方向键
-///   "y" / "n"      → 快捷键
-///   "text:内容"    → 输入文本（不含回车）
-///   "submit:内容"  → 输入文本 + 回车
+fn action_to_bytes(action: &str) -> Result<Vec<u8>, String> {
+    match action {
+        "enter" => Ok(vec![b'\r']),
+        "space" => Ok(vec![b' ']),
+        "up" => Ok(vec![0x1b, b'[', b'A']),
+        "down" => Ok(vec![0x1b, b'[', b'B']),
+        "right" => Ok(vec![0x1b, b'[', b'C']),
+        "left" => Ok(vec![0x1b, b'[', b'D']),
+        "y" => Ok(vec![b'y']),
+        "n" => Ok(vec![b'n']),
+        _ if action.starts_with("text:") => Ok(action[5..].as_bytes().to_vec()),
+        _ if action.starts_with("submit:") => {
+            let mut d = action[7..].as_bytes().to_vec();
+            d.push(b'\r');
+            Ok(d)
+        }
+        _ => Err(format!("未知 action：{}", action)),
+    }
+}
+
+/// 发送单个按键。
 #[tauri::command]
 pub fn wizard_send_key(state: tauri::State<'_, OnboardWizardState>, action: String) -> Result<(), String> {
     use std::io::Write;
     let mut g = state.inner.lock().unwrap();
     let inner = g.as_mut().ok_or("向导未在运行")?;
-    let w = &mut inner.writer;
-    let data: Vec<u8> = match action.as_str() {
-        "enter" => vec![b'\r'],
-        "up" => vec![0x1b, b'[', b'A'],
-        "down" => vec![0x1b, b'[', b'B'],
-        "right" => vec![0x1b, b'[', b'C'],
-        "left" => vec![0x1b, b'[', b'D'],
-        "y" => vec![b'y'],
-        "n" => vec![b'n'],
-        _ if action.starts_with("text:") => {
-            action[5..].as_bytes().to_vec()
-        }
-        _ if action.starts_with("submit:") => {
-            let mut d = action[7..].as_bytes().to_vec();
-            d.push(b'\r');
-            d
-        }
-        _ => return Err(format!("未知 action：{}", action)),
-    };
-    w.write_all(&data).map_err(|e| e.to_string())?;
-    w.flush().map_err(|e| e.to_string())?;
+    let data = action_to_bytes(&action)?;
+    inner.writer.write_all(&data).map_err(|e| e.to_string())?;
+    inner.writer.flush().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 批量发送多个按键（一次加锁 + 一次 flush，减少延迟）。
+#[tauri::command]
+pub fn wizard_send_keys(state: tauri::State<'_, OnboardWizardState>, actions: Vec<String>) -> Result<(), String> {
+    use std::io::Write;
+    let mut g = state.inner.lock().unwrap();
+    let inner = g.as_mut().ok_or("向导未在运行")?;
+    for action in &actions {
+        let data = action_to_bytes(action)?;
+        inner.writer.write_all(&data).map_err(|e| e.to_string())?;
+    }
+    inner.writer.flush().map_err(|e| e.to_string())?;
     Ok(())
 }
 

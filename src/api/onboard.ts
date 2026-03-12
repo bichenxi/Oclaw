@@ -33,10 +33,12 @@ export async function isOnboardPtyRunning(): Promise<boolean> {
 // ─── 卡片向导（跨平台 PTY + 屏幕解析）──────────────────────────────────────
 
 export interface WizardPrompt {
-  prompt_type: 'confirm' | 'select' | 'input' | 'password' | 'info' | 'done'
+  prompt_type: 'confirm' | 'select' | 'multiselect' | 'input' | 'password' | 'info' | 'done'
   question: string
   options: string[]
   selected: number
+  checked: number[]
+  error?: string
 }
 
 export async function startOnboardWizard(): Promise<void> {
@@ -45,6 +47,11 @@ export async function startOnboardWizard(): Promise<void> {
 
 export async function wizardSendKey(action: string): Promise<void> {
   await invoke('wizard_send_key', { action })
+}
+
+/** 批量发送多个按键（单次 IPC，一次 flush） */
+export async function wizardSendKeys(actions: string[]): Promise<void> {
+  await invoke('wizard_send_keys', { actions })
 }
 
 export async function killOnboardWizard(): Promise<void> {

@@ -3,6 +3,7 @@ import { useOnboardStore } from '@/stores/onboard'
 import {
   startOnboardWizard,
   wizardSendKey,
+  wizardSendKeys,
   killOnboardWizard,
   type WizardPrompt,
 } from '@/api/onboard'
@@ -15,28 +16,80 @@ const store = useOnboardStore()
 const tabsStore = useTabsStore()
 const unlistens = ref<Array<() => void>>([])
 const starting = ref(false)
+const sending = ref(false)
+let sendingTimer: ReturnType<typeof setTimeout> | null = null
 let pollTimer: ReturnType<typeof setInterval> | null = null
+
+/** multiselect 本地光标与勾选状态（不依赖后端 selected 检测） */
+const msCursor = ref(0)
+const msChecked = ref<number[]>([])
+const msQuestion = ref('')
+
+/** select 本地光标（TUI 循环导航，需用差量定位） */
+const selCursor = ref(0)
+const selQuestion = ref('')
+
+function unlockSending() {
+  sending.value = false
+  if (sendingTimer) { clearTimeout(sendingTimer); sendingTimer = null }
+}
+
+function lockSendingWithTimeout(ms = 500) {
+  sending.value = true
+  if (sendingTimer) clearTimeout(sendingTimer)
+  sendingTimer = setTimeout(() => { sending.value = false }, ms)
+}
 
 function startListeners() {
   listen<WizardPrompt>('wizard:prompt', (e) => {
     const prev = store.wizardPrompt
-    if (prev && prev.prompt_type !== 'done') {
+    const next = e.payload
+
+    const isSamePrompt = prev
+      && prev.prompt_type === next.prompt_type
+      && prev.question === next.question
+      && JSON.stringify(prev.options) === JSON.stringify(next.options)
+
+    if (prev && prev.prompt_type !== 'done' && !isSamePrompt) {
+      let answer = ''
+      if (prev.prompt_type === 'confirm') {
+        answer = prev.options[prev.selected] ?? ''
+      } else if (prev.prompt_type === 'select') {
+        answer = prev.options[selCursor.value] ?? ''
+      } else if (prev.prompt_type === 'multiselect') {
+        answer = msChecked.value.map(idx => prev.options[idx]).filter(Boolean).join(', ')
+      } else if (prev.prompt_type === 'input' || prev.prompt_type === 'password') {
+        answer = '***'
+      }
       store.wizardHistory.push({
         question: prev.question,
-        answer: prev.prompt_type === 'confirm'
-          ? prev.options[prev.selected] ?? ''
-          : prev.prompt_type === 'select'
-            ? prev.options[prev.selected] ?? ''
-            : '...',
+        answer: answer || '...',
       })
     }
-    store.wizardPrompt = e.payload
-    store.wizardInputValue = ''
+    store.wizardPrompt = next
+
+    if (next.prompt_type === 'multiselect') {
+      if (msQuestion.value !== next.question) {
+        msCursor.value = 0
+        msChecked.value = [...next.checked]
+        msQuestion.value = next.question
+      }
+    } else if (next.prompt_type === 'select') {
+      if (selQuestion.value !== next.question) {
+        selCursor.value = next.selected
+        selQuestion.value = next.question
+      }
+    } else if (!isSamePrompt) {
+      store.wizardInputValue = ''
+    }
+
+    unlockSending()
   }).then((fn) => unlistens.value.push(fn))
 
   listen<{ code: number }>('wizard:exited', (e) => {
     store.wizardRunning = false
     store.wizardExitCode = e.payload.code
+    unlockSending()
     if (e.payload.code === 0) {
       startGateway()
     } else {
@@ -48,6 +101,7 @@ function startListeners() {
 function stopListeners() {
   unlistens.value.forEach((fn) => fn())
   unlistens.value = []
+  unlockSending()
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
 }
 
@@ -78,35 +132,78 @@ async function handleStart() {
   }
 }
 
-async function answerConfirm(choice: number) {
+/** 导航键（up/down）不加锁，立即更新本地光标 */
+function sendNav(dir: 'up' | 'down') {
   const prompt = store.wizardPrompt
-  if (!prompt) return
-  if (choice === 0 && prompt.selected !== 0) {
-    await wizardSendKey('left')
-  } else if (choice === 1 && prompt.selected !== 1) {
-    await wizardSendKey('right')
+  if (!prompt || prompt.prompt_type !== 'multiselect') return
+  const len = prompt.options.length
+  if (len === 0) return
+  if (dir === 'up') {
+    msCursor.value = (msCursor.value - 1 + len) % len
+  } else {
+    msCursor.value = (msCursor.value + 1) % len
   }
-  await new Promise((r) => setTimeout(r, 50))
-  await wizardSendKey('enter')
+  wizardSendKey(dir).catch(() => {})
+}
+
+/** 切换当前光标项的勾选状态，本地立即更新 */
+function sendToggle() {
+  if (sending.value) return
+  const idx = msCursor.value
+  const pos = msChecked.value.indexOf(idx)
+  if (pos >= 0) {
+    msChecked.value.splice(pos, 1)
+  } else {
+    msChecked.value.push(idx)
+  }
+  lockSendingWithTimeout(500)
+  wizardSendKey('space').catch(() => { unlockSending() })
+}
+
+/** 提交 multiselect */
+function sendSubmit() {
+  if (sending.value) return
+  lockSendingWithTimeout(500)
+  wizardSendKey('enter').catch(() => { unlockSending() })
+}
+
+async function answerConfirm(choice: number) {
+  if (sending.value) return
+  lockSendingWithTimeout(600)
+  try {
+    if (choice === 0) {
+      await wizardSendKey('left')
+    } else {
+      await wizardSendKey('right')
+    }
+    await wizardSendKey('enter')
+  } catch {
+    unlockSending()
+  }
 }
 
 async function answerSelect(index: number) {
+  if (sending.value) return
   const prompt = store.wizardPrompt
   if (!prompt) return
-  const diff = index - prompt.selected
-  if (diff > 0) {
-    for (let i = 0; i < diff; i++) await wizardSendKey('down')
-  } else if (diff < 0) {
-    for (let i = 0; i < -diff; i++) await wizardSendKey('up')
+  lockSendingWithTimeout(800)
+  const delta = index - selCursor.value
+  const keys: string[] = []
+  if (delta > 0) {
+    for (let i = 0; i < delta; i++) keys.push('down')
+  } else if (delta < 0) {
+    for (let i = 0; i < -delta; i++) keys.push('up')
   }
-  await new Promise((r) => setTimeout(r, 50))
-  await wizardSendKey('enter')
+  keys.push('enter')
+  selCursor.value = index
+  await wizardSendKeys(keys).catch(() => { unlockSending() })
 }
 
 async function answerInput() {
   const text = store.wizardInputValue.trim()
   if (!text) return
-  await wizardSendKey(`submit:${text}`)
+  lockSendingWithTimeout(600)
+  await wizardSendKey(`submit:${text}`).catch(() => { unlockSending() })
 }
 
 async function startGateway() {
@@ -114,7 +211,7 @@ async function startGateway() {
   try {
     await restartOpenclawGateway()
   } catch (_) {
-    // 即使 restart 失败，也开始轮询（可能是第一次 start）
+    // ignore
   }
   pollTimer = setInterval(async () => {
     const alive = await checkOpenclawAlive().catch(() => false)
@@ -124,7 +221,6 @@ async function startGateway() {
       store.wizardStartingGateway = false
     }
   }, 1500)
-  // 30 秒超时
   setTimeout(() => {
     if (pollTimer) {
       clearInterval(pollTimer)
@@ -140,6 +236,7 @@ async function startGateway() {
 function handleClose() {
   if (store.wizardRunning) killOnboardWizard().catch(() => {})
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  unlockSending()
   store.closeWizard()
 }
 
@@ -158,7 +255,7 @@ function goToChat() {
       >
         <div
           class="absolute inset-0 bg-black/40 backdrop-blur-sm"
-          @click="!store.wizardRunning && !store.wizardStartingGateway && handleClose()"
+          @click="handleClose()"
         />
 
         <div class="relative w-full max-w-[520px] mx-4 bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
@@ -177,8 +274,8 @@ function goToChat() {
                 </div>
               </div>
             </div>
+            <!-- 始终显示关闭按钮 -->
             <button
-              v-if="!store.wizardRunning && !store.wizardStartingGateway"
               class="w-7 h-7 flex-center rounded-lg text-[#9b8ec4] hover:bg-[#f5f3ff] hover:text-secondary transition cursor-pointer bg-transparent border-none"
               @click="handleClose()"
             >
@@ -232,7 +329,8 @@ function goToChat() {
                     v-for="(opt, i) in store.wizardPrompt.options"
                     :key="i"
                     type="button"
-                    class="flex-1 py-2.5 text-[13px] font-medium rounded-xl border cursor-pointer transition"
+                    :disabled="sending"
+                    class="flex-1 py-2.5 text-[13px] font-medium rounded-xl border cursor-pointer transition disabled:opacity-50"
                     :class="i === 0
                       ? 'border-secondary bg-secondary/8 text-secondary hover:bg-secondary/15'
                       : 'border-[#e8e2f4] text-[#6b5f8a] hover:border-secondary/30 hover:bg-secondary/5'"
@@ -250,7 +348,8 @@ function goToChat() {
                   v-for="(opt, i) in store.wizardPrompt.options"
                   :key="i"
                   type="button"
-                  class="flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition cursor-pointer"
+                  :disabled="sending"
+                  class="flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition cursor-pointer disabled:opacity-50"
                   :class="store.wizardPrompt.selected === i
                     ? 'border-secondary bg-secondary/8 text-secondary'
                     : 'border-[#e8e2f4] bg-white text-[#4a4568] hover:border-secondary/30 hover:bg-secondary/5'"
@@ -261,6 +360,76 @@ function goToChat() {
                   </span>
                   <span class="text-[13px] font-medium">{{ opt }}</span>
                 </button>
+              </div>
+
+              <!-- Multiselect：本地光标/勾选 + 导航按钮 -->
+              <div v-else-if="store.wizardPrompt.prompt_type === 'multiselect'" class="flex flex-col gap-3">
+                <p class="text-[13px] font-medium text-[#4a4568] m-0">{{ store.wizardPrompt.question }}</p>
+
+                <div class="flex flex-col rounded-xl border border-[#e8e2f4] overflow-hidden">
+                  <div
+                    v-for="(opt, i) in store.wizardPrompt.options"
+                    :key="i"
+                    class="flex items-center gap-3 px-4 py-2.5 transition-colors duration-100"
+                    :class="[
+                      msCursor === i ? 'bg-secondary/6' : 'bg-white',
+                      i < store.wizardPrompt.options.length - 1 ? 'border-b border-[#f0ecfa]' : '',
+                    ]"
+                  >
+                    <span class="w-3 text-[13px] font-bold shrink-0" :class="msCursor === i ? 'text-secondary' : 'text-transparent'">›</span>
+                    <div class="w-4 h-4 rounded border-2 flex-center shrink-0 transition" :class="msChecked.includes(i) ? 'border-secondary bg-secondary' : 'border-[#c4bdd8]'">
+                      <svg v-if="msChecked.includes(i)" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="4">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    </div>
+                    <span class="text-[13px]" :class="msChecked.includes(i) ? 'text-secondary font-medium' : 'text-[#4a4568]'">{{ opt }}</span>
+                  </div>
+                </div>
+
+                <div v-if="store.wizardPrompt.error" class="text-[11px] text-red-500 font-medium flex items-center gap-1.5">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+                  </svg>
+                  {{ store.wizardPrompt.error }}
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    class="flex items-center gap-1 px-3 py-1.5 text-[12px] font-medium rounded-lg border border-[#e8e2f4] bg-white text-[#4a4568] hover:border-secondary/30 hover:bg-secondary/5 cursor-pointer transition active:scale-95"
+                    @click="sendNav('up')"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15" /></svg>
+                    上移
+                  </button>
+                  <button
+                    type="button"
+                    class="flex items-center gap-1 px-3 py-1.5 text-[12px] font-medium rounded-lg border border-[#e8e2f4] bg-white text-[#4a4568] hover:border-secondary/30 hover:bg-secondary/5 cursor-pointer transition active:scale-95"
+                    @click="sendNav('down')"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9" /></svg>
+                    下移
+                  </button>
+                  <button
+                    type="button"
+                    :disabled="sending"
+                    class="flex items-center gap-1 px-3 py-1.5 text-[12px] font-medium rounded-lg border border-secondary/30 bg-secondary/6 text-secondary hover:bg-secondary/12 cursor-pointer transition active:scale-95 disabled:opacity-40"
+                    @click="sendToggle()"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12" /></svg>
+                    切换
+                  </button>
+                  <div class="flex-1" />
+                  <button
+                    type="button"
+                    :disabled="sending"
+                    class="px-5 py-1.5 text-[12px] font-medium text-white rounded-lg cursor-pointer transition bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] shadow-[0_2px_6px_rgba(95,71,206,0.18)] active:scale-95 disabled:opacity-40"
+                    @click="sendSubmit()"
+                  >
+                    确认
+                  </button>
+                </div>
+                <p class="text-[10px] text-[#9b8ec4] m-0">↑↓ 移动光标，「切换」勾选/取消，「确认」提交</p>
               </div>
 
               <!-- Input / Password -->
@@ -292,7 +461,7 @@ function goToChat() {
                 <span class="text-[13px] font-medium">{{ store.wizardPrompt.question }}</span>
               </div>
 
-              <!-- Info / 未知类型：显示纯文本 -->
+              <!-- Info / 未知类型 -->
               <div v-else class="px-4 py-3 rounded-xl bg-[#faf9ff] border border-[#f0ecfa] text-[12px] text-[#6b5f8a]">
                 {{ store.wizardPrompt.question }}
               </div>

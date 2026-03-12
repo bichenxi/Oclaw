@@ -85,6 +85,7 @@ pub fn run() {
             configure::is_onboard_pty_running,
             configure::start_onboard_wizard,
             configure::wizard_send_key,
+            configure::wizard_send_keys,
             configure::kill_onboard_wizard,
             configure::is_onboard_wizard_running,
             gateway::check_and_fix_gateway_config,
