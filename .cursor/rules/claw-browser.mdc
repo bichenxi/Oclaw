@@ -1,11 +1,11 @@
 ---
-description: Claw Browser 项目约定与扩展方式
+description: Oclaw 项目约定与扩展方式
 alwaysApply: true
 ---
 
-# Claw Browser
+# Oclaw
 
-本仓库为 **Claw Browser**（与 OpenClaw 结合使用的桌面浏览器），技术栈：Tauri 2 + Vue 3 + TypeScript + Vite + Pinia + UnoCSS + Element Plus。
+本仓库为 **Oclaw**（与 OpenClaw 结合使用的桌面浏览器），技术栈：Tauri 2 + Vue 3 + TypeScript + Vite + Pinia + UnoCSS + Element Plus。
 
 - **路由**：`src/pages/` 下 `.vue` 即路由（unplugin-vue-router）。
 - **布局**：`src/layouts/default.vue` 为默认布局。

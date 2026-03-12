@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Claw Browser",
+        "title": "Oclaw",
         "width": 1280,
         "height": 800,
         "titleBarStyle": "Overlay",

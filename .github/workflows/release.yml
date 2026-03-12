@@ -129,9 +129,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: Claw Browser ${{ github.ref_name }}
+          releaseName: Oclaw ${{ github.ref_name }}
           releaseBody: |
-            ## Claw Browser ${{ github.ref_name }}
+            ## Oclaw ${{ github.ref_name }}
 
             ### 安装
             - **macOS Apple Silicon**: 下载 `_aarch64.dmg`

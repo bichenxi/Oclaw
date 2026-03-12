@@ -1,13 +1,13 @@
 ---
 name: claw-browser
-description: Claw Browser 项目开发约定与 Tauri/Vue 架构规范。在为本仓库添加功能、调用 Tauri 命令、改路由或状态时使用；新增代码必须符合本技能中的前端与 Rust 规范。
+description: Oclaw 项目开发约定与 Tauri/Vue 架构规范。在为本仓库添加功能、调用 Tauri 命令、改路由或状态时使用；新增代码必须符合本技能中的前端与 Rust 规范。
 ---
 
-# Claw Browser 开发技能
+# Oclaw 开发技能
 
 ## 项目身份
 
-- 仓库：Claw Browser，与 OpenClaw 结合使用的桌面浏览器壳。
+- 仓库：Oclaw，与 OpenClaw 结合使用的桌面浏览器壳。
 - 栈：Tauri 2 + Vue 3 + TypeScript + Vite + Pinia + UnoCSS + Element Plus。
 - 内置 HTTP 服务：`api.rs` 在 `127.0.0.1:18790` 暴露浏览器控制接口，供 OpenClaw Agent 通过 curl 调用（见 `openclaw-skill/SKILL.md`）。
 

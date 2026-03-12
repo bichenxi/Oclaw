@@ -17,7 +17,7 @@
 ---
 name: claw-<站点名>
 version: 1.0
-description: 通过 Claw Browser 自主操控<站点>的专属技能。
+description: 通过 Oclaw 自主操控<站点>的专属技能。
 ---
 
 # <站点> 自主操控技能

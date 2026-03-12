@@ -1,13 +1,13 @@
 # OpenClaw 桌面化方案（分步实施）
 
-OpenClaw 是 **TypeScript/Node.js** 项目（[openclaw/openclaw](https://github.com/openclaw/openclaw)），用 pnpm 管理。要在 Claw Browser 内「一键运行 OpenClaw」，不能当 Rust 库用，只能以**子进程**方式启动（打包成单文件二进制，或用系统/内嵌 Node 运行脚本）。
+OpenClaw 是 **TypeScript/Node.js** 项目（[openclaw/openclaw](https://github.com/openclaw/openclaw)），用 pnpm 管理。要在 Oclaw 内「一键运行 OpenClaw」，不能当 Rust 库用，只能以**子进程**方式启动（打包成单文件二进制，或用系统/内嵌 Node 运行脚本）。
 
 ---
 
 ## 目标
 
-- 用户打开 Claw Browser 后，在应用内点击「启动 OpenClaw」即可使用，无需单独开终端或安装 Node。
-- OpenClaw 以 Gateway 形式监听 18789，用户在本机浏览器或应用内连接 18789 对话；OpenClaw 通过 Shell 调 curl 控制 Claw Browser 的 18790 API。
+- 用户打开 Oclaw 后，在应用内点击「启动 OpenClaw」即可使用，无需单独开终端或安装 Node。
+- OpenClaw 以 Gateway 形式监听 18789，用户在本机浏览器或应用内连接 18789 对话；OpenClaw 通过 Shell 调 curl 控制 Oclaw 的 18790 API。
 
 ---
 
@@ -24,7 +24,7 @@ OpenClaw 是 **TypeScript/Node.js** 项目（[openclaw/openclaw](https://github.
 
 ## 第一步：在本地跑通 OpenClaw（不依赖 Tauri）
 
-目标：确认 OpenClaw 能独立运行、起 Gateway、并能用 curl 控制 Claw Browser。
+目标：确认 OpenClaw 能独立运行、起 Gateway、并能用 curl 控制 Oclaw。
 
 1. **克隆并安装**
    ```bash
@@ -43,8 +43,8 @@ OpenClaw 是 **TypeScript/Node.js** 项目（[openclaw/openclaw](https://github.
    ```
    - 浏览器打开 http://127.0.0.1:18789/，能见 Web UI 即成功。
 
-4. **确认与 Claw Browser 联动**
-   - 先启动 Claw Browser（保证 18790 已起）。
+4. **确认与 Oclaw 联动**
+   - 先启动 Oclaw（保证 18790 已起）。
    - 在 OpenClaw 里发一条「用 claw 打开 https://example.com」或「claw 快照」。
    - 若浏览器有反应，说明 Skill 调 18790 正常。
 
@@ -52,7 +52,7 @@ OpenClaw 是 **TypeScript/Node.js** 项目（[openclaw/openclaw](https://github.
 
 ---
 
-## 第二步：在 Claw Browser 里用「系统 Node」启动 OpenClaw（开发态）
+## 第二步：在 Oclaw 里用「系统 Node」启动 OpenClaw（开发态）
 
 目标：不打包，用本机已安装的 `node`，由 Tauri 拉起 OpenClaw 进程。
 
@@ -74,20 +74,20 @@ OpenClaw 是 **TypeScript/Node.js** 项目（[openclaw/openclaw](https://github.
 4. **工作目录**
    - 启动时 `current_dir(openclaw_root)`，保证 OpenClaw 能读到自己的配置、Skill、node_modules（若用 B 方案带源码）。
 
-**产出**：开发环境下，在 Claw Browser 里点「启动 OpenClaw」后，18789 可用，且能控制 18790。
+**产出**：开发环境下，在 Oclaw 里点「启动 OpenClaw」后，18789 可用，且能控制 18790。
 
 ---
 
 ## 第三步：打包时把 OpenClaw 带进安装包（方案 B）
 
-目标：安装 Claw Browser 后，不依赖用户本机是否有 OpenClaw 或 Node。
+目标：安装 Oclaw 后，不依赖用户本机是否有 OpenClaw 或 Node。
 
 1. **Node 运行时**
    - **选项 1**：不内嵌 Node，安装包要求用户已装 Node，启动时用 `node`（PATH）。
    - **选项 2**：把便携版 Node（如 node-v20-win-x64、darwin arm64）放进 `bundle.resources`，启动时用 `path/to/node path/to/openclaw/dist/index.js`。
 
 2. **OpenClaw 源码**
-   - 在 Claw Browser 的构建脚本里（如 `beforeBuildCommand` 或单独脚本）：
+   - 在 Oclaw 的构建脚本里（如 `beforeBuildCommand` 或单独脚本）：
      - `git clone` 或 `cp -r` OpenClaw 到 `src-tauri/resources/openclaw`；
      - 在 resources 目录下执行 `pnpm install --prod` 和 `pnpm build`（或 `tsc`）；
    - 在 `tauri.conf.json` 的 `bundle.resources` 里加入 `openclaw` 目录（或打包成 zip 再解压到 resource_dir）。
@@ -95,7 +95,7 @@ OpenClaw 是 **TypeScript/Node.js** 项目（[openclaw/openclaw](https://github.
 3. **运行时路径**
    - Rust 里用 `app.path().resource_dir()` 得到安装后的 resources 目录，拼出 `openclaw_dir` 和 `node_bin`（若内嵌 Node），再 `Command::new(node_bin).args([openclaw_entry]).current_dir(openclaw_dir)`。
 
-**产出**：打包后的 Claw Browser 安装包内带 OpenClaw（及可选 Node），用户无需单独安装。
+**产出**：打包后的 Oclaw 安装包内带 OpenClaw（及可选 Node），用户无需单独安装。
 
 ---
 
@@ -109,7 +109,7 @@ OpenClaw 是 **TypeScript/Node.js** 项目（[openclaw/openclaw](https://github.
      - 或 `ncc build src/index.ts -o dist-single` 再配合 pkg 打包成可执行文件。
    - 输出按 Tauri 约定命名：`openclaw-aarch64-apple-darwin`、`openclaw-x86_64-pc-windows-msvc.exe` 等。
 
-2. **放入 Claw Browser**
+2. **放入 Oclaw**
    - 把上述二进制放到 `src-tauri/bin/`（或 `binaries/`），与 `tauri.conf.json` 里 `externalBin` 一致。
    - 当前配置是 `externalBin: ["bin/openclaw"]`，Tauri 会按平台找 `openclaw-<target>`。
 
@@ -140,7 +140,7 @@ OpenClaw 是 **TypeScript/Node.js** 项目（[openclaw/openclaw](https://github.
 | 顺序 | 内容 | 说明 |
 |------|------|------|
 | 1 | 在本地用 pnpm 跑通 OpenClaw，确认 18789 + 18790 联动 | 不写代码，先验证环境与命令 |
-| 2 | 在 Claw Browser 里用 Shell 启动「本机 OpenClaw 目录」的 node 入口，并实现 start/stop + 退出杀进程 | 开发态可用 |
+| 2 | 在 Oclaw 里用 Shell 启动「本机 OpenClaw 目录」的 node 入口，并实现 start/stop + 退出杀进程 | 开发态可用 |
 | 3 | 前端加「启动/停止 OpenClaw」按钮与状态展示 | 体验闭环 |
 | 4 | 选 B：把 OpenClaw（+ 可选 Node）打进 resources，打包后从 resource_dir 启动 | 发行版不依赖本机 Node |
 | 5 | 可选：做方案 A，用 pkg 打 OpenClaw 单文件，用 Sidecar 启动 | 不依赖 Node 的发行方式 |
@@ -157,7 +157,7 @@ OpenClaw 是 **TypeScript/Node.js** 项目（[openclaw/openclaw](https://github.
 - **命令**：`start_openclaw`、`stop_openclaw`、`is_openclaw_running`。
 - **前端**：左侧 AI 控制台有「OpenClaw」区块，显示状态（已运行/未运行）及「启动」「停止」按钮。
 
-**开发时用 Node 跑 OpenClaw**：在 OpenClaw 仓库 `pnpm build` 后，在启动 Claw Browser 前设置环境变量再运行，例如：
+**开发时用 Node 跑 OpenClaw**：在 OpenClaw 仓库 `pnpm build` 后，在启动 Oclaw 前设置环境变量再运行，例如：
 
 ```bash
 export OPENCLAW_ENTRY=/path/to/openclaw/dist/index.js

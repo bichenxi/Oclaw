@@ -1,4 +1,4 @@
-# Claw Browser — Claude Code 项目规范
+# Oclaw — Claude Code 项目规范
 
 ## 技术栈
 
@@ -77,7 +77,7 @@ src-tauri/
 
 `openclaw-skill/` 目录下的 `.md` 文件是 **OpenClaw AI Agent 的提示词（Skill）**，
 不是给 Claude Code 的指令。OpenClaw 在接到用户任务时会读取这些文件，
-了解如何通过 `curl http://127.0.0.1:18790` 控制 Claw Browser。
+了解如何通过 `curl http://127.0.0.1:18790` 控制 Oclaw。
 
 ```
 openclaw-skill/

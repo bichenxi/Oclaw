@@ -1,6 +1,6 @@
-# Claw Browser — Agent 说明
+# Oclaw — Agent 说明
 
-本仓库为 **Claw Browser** 的工程，与 OpenClaw 结合使用，采用干净骨架，便于在此基础上扩展与 OpenClaw 相关的浏览器能力。
+本仓库为 **Oclaw** 的工程，与 OpenClaw 结合使用，采用干净骨架，便于在此基础上扩展与 OpenClaw 相关的浏览器能力。
 
 ## 角色与目标
 

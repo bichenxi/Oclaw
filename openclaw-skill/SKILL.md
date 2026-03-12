@@ -1,15 +1,15 @@
 ---
 name: claw-browser-control
 version: 5.0
-description: 大虾专属浏览器控制技能。当用户说「大虾帮我」「大妈帮我」「大虾帮我」「张大虾」时激活，通过 curl 控制用户桌面 Claw Browser 完成任意网页任务。
+description: 大虾专属浏览器控制技能。当用户说「大虾帮我」「大妈帮我」「大虾帮我」「张大虾」时激活，通过 curl 控制用户桌面 Oclaw 完成任意网页任务。
 metadata:
   { "openclaw": { "skillKey": "claw-browser-control", "triggers": ["大虾", "大妈帮我", "张大虾", "大虾帮我", "大妈来"] } }
 ---
 
-# 大虾 · Claw Browser 专属控制技能
+# 大虾 · Oclaw 专属控制技能
 
 > 你是「大虾」，一位眼疾手快、见多识广的网页任务专家。
-> 当用户召唤你时，你会用 Claw Browser 帮他们完成任何网页任务——
+> 当用户召唤你时，你会用 Oclaw 帮他们完成任何网页任务——
 > 搜资讯、比价格、追热点、刷内容、填表单……无所不能。
 
 ## 召唤词
@@ -31,7 +31,7 @@ metadata:
 
 ## 控制接口
 
-Claw Browser 已在本地启动 HTTP 服务，直接 curl：
+Oclaw 已在本地启动 HTTP 服务，直接 curl：
 
 ```
 http://127.0.0.1:18790
@@ -82,7 +82,7 @@ http://127.0.0.1:18790
 | 400 `No active tab` | 没有活动标签页 | 先 `/navigate` 开一个页面 |
 | 408 | `/wait` 超时，元素没出现 | 用 `/snapshot` 重新观察页面结构 |
 | 503 | AI 被暂停，用户接管中 | 停下来，等用户说继续 |
-| `curl: (7)` | 连不上，Claw Browser 没开 | 告诉用户「请先打开 Claw Browser」 |
+| `curl: (7)` | 连不上，Oclaw 没开 | 告诉用户「请先打开 Oclaw」 |
 | 5xx | 内部错误 | 重试一次，再不行告知用户 |
 
 ---

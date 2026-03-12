@@ -186,7 +186,7 @@ function copyCommand() {
         <img src="/logo.jpg" class="w-16 h-16 rounded-[14px] object-cover shadow-lg" alt="logo" />
         <h1 class="text-2xl font-bold text-[#2d1f6e]">安装 OpenClaw</h1>
         <p class="text-[13px] text-[#7b6aa8] text-center max-w-[360px] leading-relaxed">
-          Claw Browser 需要 OpenClaw 本地 gateway 才能工作。<br />
+          Oclaw 需要 OpenClaw 本地 gateway 才能工作。<br />
           点击「开始安装」，将自动完成环境配置与初始化。
         </p>
       </div>

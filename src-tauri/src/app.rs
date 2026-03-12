@@ -2,7 +2,7 @@ use tauri::Emitter;
 
 #[tauri::command]
 pub fn greet(name: &str) -> String {
-    format!("Hello, {}! Claw Browser ready.", name)
+    format!("Hello, {}! Oclaw ready.", name)
 }
 
 #[tauri::command]

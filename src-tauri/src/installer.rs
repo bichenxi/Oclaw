@@ -244,7 +244,7 @@ fn ensure_local_bin_in_path(app: &AppHandle, home_dir: &std::path::Path) {
 
     match std::fs::OpenOptions::new().append(true).create(true).open(&profile) {
         Ok(mut f) => {
-            if writeln!(f, "\n# Added by Claw Browser\n{}", export_line).is_ok() {
+            if writeln!(f, "\n# Added by Oclaw\n{}", export_line).is_ok() {
                 emit_log(app, &format!(
                     "已自动将 ~/.local/bin 添加到 ~/{} 的 PATH 中。",
                     profile_name
@@ -393,7 +393,7 @@ fn add_node_bin_to_shell_profile(app: &AppHandle, node_bin_dir: &std::path::Path
 
     match std::fs::OpenOptions::new().append(true).create(true).open(&profile) {
         Ok(mut f) => {
-            if writeln!(f, "\n# Added by Claw Browser — bundled Node.js\n{}", export_line).is_ok() {
+            if writeln!(f, "\n# Added by Oclaw — bundled Node.js\n{}", export_line).is_ok() {
                 emit_log(app, &format!(
                     "已将内置 Node.js 路径添加到 ~/{} 中。", profile_name
                 ));

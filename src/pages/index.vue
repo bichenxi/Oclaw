@@ -34,7 +34,7 @@ function handleKeydown(e: KeyboardEvent) {
           alt="logo"
         />
         <div class="flex flex-col">
-          <span class="text-[28px] font-bold tracking-[-0.5px] text-secondary leading-[1.1]">Claw Browser</span>
+          <span class="text-[28px] font-bold tracking-[-0.5px] text-secondary leading-[1.1]">Oclaw</span>
           <span class="text-[12px] text-[#9b8ec4] tracking-[3px] mt-0.5">你 的 专 属 浏 览 器</span>
         </div>
       </div>
