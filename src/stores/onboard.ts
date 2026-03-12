@@ -17,6 +17,9 @@ export const useOnboardStore = defineStore('onboard', () => {
 
   function close() {
     visible.value = false
+    ptyRunning.value = false
+    ptyExitCode.value = null
+    ptyError.value = null
   }
 
   // ─── 卡片向导（跨平台 PTY + 屏幕解析 → prompt 事件驱动）──────────────────
@@ -48,6 +51,14 @@ export const useOnboardStore = defineStore('onboard', () => {
 
   function closeWizard() {
     wizardVisible.value = false
+    wizardRunning.value = false
+    wizardError.value = null
+    wizardExitCode.value = null
+    wizardPrompt.value = null
+    wizardHistory.value = []
+    wizardInputValue.value = ''
+    wizardStartingGateway.value = false
+    wizardGatewayDone.value = false
   }
 
   return {

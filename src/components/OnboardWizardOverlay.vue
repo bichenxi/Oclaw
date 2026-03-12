@@ -19,6 +19,8 @@ const installerStore = useInstallerStore()
 const unlistens = ref<Array<() => void>>([])
 const starting = ref(false)
 const sending = ref(false)
+/** 已提交答案，等待下一个 prompt */
+const waitingNext = ref(false)
 let sendingTimer: ReturnType<typeof setTimeout> | null = null
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -33,6 +35,13 @@ const selQuestion = ref('')
 
 /** 是否显示中文翻译 */
 const showChinese = ref(true)
+/** 是否展开 TUI 调试面板 */
+const showRaw = ref(false)
+/** 调试面板当前 Tab：screen=终端全文，parsed=解析结果 */
+const rawTab = ref<'screen' | 'parsed'>('screen')
+/** 完整的终端屏幕文本（后端每次解析都推送） */
+const screenText = ref('')
+const screenCursorRow = ref(0)
 
 const i18nMap: Record<string, string> = {
   // ── 问题 ──
@@ -147,6 +156,7 @@ function startListeners() {
       })
     }
     store.wizardPrompt = next
+    waitingNext.value = false
 
     if (next.prompt_type === 'multiselect') {
       if (msQuestion.value !== next.question) {
@@ -166,9 +176,15 @@ function startListeners() {
     unlockSending()
   }).then((fn) => unlistens.value.push(fn))
 
+  listen<{ text: string; cursor_row: number }>('wizard:screen', (e) => {
+    screenText.value = e.payload.text
+    screenCursorRow.value = e.payload.cursor_row
+  }).then((fn) => unlistens.value.push(fn))
+
   listen<{ code: number }>('wizard:exited', (e) => {
     store.wizardRunning = false
     store.wizardExitCode = e.payload.code
+    waitingNext.value = false
     unlockSending()
     if (e.payload.code === 0) {
       startGateway()
@@ -243,12 +259,14 @@ function sendToggle() {
 /** 提交 multiselect */
 function sendSubmit() {
   if (sending.value) return
+  waitingNext.value = true
   lockSendingWithTimeout(500)
-  wizardSendKey('enter').catch(() => { unlockSending() })
+  wizardSendKey('enter').catch(() => { waitingNext.value = false; unlockSending() })
 }
 
 async function answerConfirm(choice: number) {
   if (sending.value) return
+  waitingNext.value = true
   lockSendingWithTimeout(600)
   try {
     if (choice === 0) {
@@ -258,6 +276,7 @@ async function answerConfirm(choice: number) {
     }
     await wizardSendKey('enter')
   } catch {
+    waitingNext.value = false
     unlockSending()
   }
 }
@@ -266,6 +285,7 @@ async function answerSelect(index: number) {
   if (sending.value) return
   const prompt = store.wizardPrompt
   if (!prompt) return
+  waitingNext.value = true
   lockSendingWithTimeout(800)
   const delta = index - selCursor.value
   const keys: string[] = []
@@ -276,14 +296,15 @@ async function answerSelect(index: number) {
   }
   keys.push('enter')
   selCursor.value = index
-  await wizardSendKeys(keys).catch(() => { unlockSending() })
+  await wizardSendKeys(keys).catch(() => { waitingNext.value = false; unlockSending() })
 }
 
 async function answerInput() {
   const text = store.wizardInputValue.trim()
   if (!text) return
+  waitingNext.value = true
   lockSendingWithTimeout(600)
-  await wizardSendKey(`submit:${text}`).catch(() => { unlockSending() })
+  await wizardSendKey(`submit:${text}`).catch(() => { waitingNext.value = false; unlockSending() })
 }
 
 async function startGateway() {
@@ -318,6 +339,8 @@ function handleClose() {
   if (store.wizardRunning) killOnboardWizard().catch(() => {})
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   unlockSending()
+  screenText.value = ''
+  screenCursorRow.value = 0
   store.closeWizard()
 }
 
@@ -356,6 +379,17 @@ function goToChat() {
               </div>
             </div>
             <div class="flex items-center gap-1.5">
+              <button
+                class="h-7 px-2 flex-center rounded-lg text-[10px] font-medium transition cursor-pointer border-none"
+                :class="showRaw ? 'bg-[#1a1030] text-green-400' : 'bg-transparent text-[#9b8ec4] hover:bg-[#f5f3ff]'"
+                title="查看 TUI 原始数据"
+                @click="showRaw = !showRaw"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="4 17 10 11 4 5" />
+                  <line x1="12" y1="19" x2="20" y2="19" />
+                </svg>
+              </button>
               <button
                 class="h-7 px-2 flex-center rounded-lg text-[10px] font-medium transition cursor-pointer border-none"
                 :class="showChinese ? 'bg-secondary/10 text-secondary' : 'bg-transparent text-[#9b8ec4] hover:bg-[#f5f3ff]'"
@@ -416,7 +450,11 @@ function goToChat() {
             </div>
 
             <!-- 当前 prompt 卡片 -->
-            <template v-if="store.wizardPrompt && store.wizardRunning">
+            <div v-if="waitingNext" class="flex flex-col items-center gap-3 py-8">
+              <span class="w-6 h-6 border-[2.5px] border-secondary border-t-transparent rounded-full animate-spin" />
+              <span class="text-[12px] text-[#9b8ec4]">正在处理…</span>
+            </div>
+            <template v-else-if="store.wizardPrompt && store.wizardRunning">
               <!-- Confirm -->
               <div v-if="store.wizardPrompt.prompt_type === 'confirm'" class="flex flex-col gap-3">
                 <p class="text-[13px] font-medium text-[#4a4568] m-0">{{ t(store.wizardPrompt.question) }}</p>
@@ -562,6 +600,56 @@ function goToChat() {
                 {{ t(store.wizardPrompt.question) }}
               </div>
             </template>
+
+            <!-- TUI 调试面板 -->
+            <div
+              v-if="showRaw"
+              class="bg-[#1a1030] rounded-xl overflow-hidden"
+            >
+              <div class="flex items-center gap-0 border-b border-[#2a2040]">
+                <button
+                  type="button"
+                  class="px-4 py-2 text-[12px] font-sans font-medium cursor-pointer transition border-none"
+                  :class="rawTab === 'screen' ? 'bg-[#2a2040] text-[#a78bfa]' : 'bg-transparent text-[#6b5f8a] hover:text-[#9b8ec4]'"
+                  @click="rawTab = 'screen'"
+                >
+                  终端全文
+                </button>
+                <button
+                  type="button"
+                  class="px-4 py-2 text-[12px] font-sans font-medium cursor-pointer transition border-none"
+                  :class="rawTab === 'parsed' ? 'bg-[#2a2040] text-[#a78bfa]' : 'bg-transparent text-[#6b5f8a] hover:text-[#9b8ec4]'"
+                  @click="rawTab = 'parsed'"
+                >
+                  解析结果
+                </button>
+              </div>
+
+              <!-- 终端全文输出 -->
+              <div v-if="rawTab === 'screen'" class="p-4 font-mono text-[12px] leading-[1.7] overflow-auto max-h-[400px]">
+                <div class="text-[11px] text-[#6b5f8a] mb-2 font-sans">cursor_row: {{ screenCursorRow }}</div>
+                <pre class="m-0 whitespace-pre text-green-400">{{ screenText || '（等待终端输出…）' }}</pre>
+              </div>
+
+              <!-- 解析后的 prompt 数据 -->
+              <div v-else-if="rawTab === 'parsed' && store.wizardPrompt" class="p-4 font-mono text-[13px] leading-[1.8] overflow-x-auto">
+                <div class="flex items-center justify-between mb-3">
+                  <span class="text-[12px] text-[#9b8ec4] font-sans font-medium">解析结果</span>
+                  <span class="text-[11px] px-2 py-0.5 rounded bg-[#2a2040] text-[#a78bfa] font-sans font-medium">{{ store.wizardPrompt.prompt_type }}</span>
+                </div>
+                <div class="text-green-400">
+                  <div><span class="text-[#9b8ec4]">question: </span>{{ store.wizardPrompt.question }}</div>
+                  <div><span class="text-[#9b8ec4]">selected: </span>{{ store.wizardPrompt.selected }}</div>
+                  <div v-if="store.wizardPrompt.checked?.length"><span class="text-[#9b8ec4]">checked: </span>[{{ store.wizardPrompt.checked.join(', ') }}]</div>
+                  <div v-if="store.wizardPrompt.error"><span class="text-red-400">error: </span>{{ store.wizardPrompt.error }}</div>
+                  <div class="mt-2 text-[#9b8ec4]">options:</div>
+                  <div v-for="(opt, i) in store.wizardPrompt.options" :key="i" class="pl-4">
+                    <span class="text-[#6b5f8a]">{{ i }}. </span>{{ opt }}
+                  </div>
+                </div>
+              </div>
+              <div v-else class="p-4 text-[12px] text-[#6b5f8a] font-sans">（暂无解析数据）</div>
+            </div>
 
             <!-- 正在启动网关 -->
             <div v-if="store.wizardStartingGateway" class="flex items-center gap-3 px-4 py-4 rounded-xl bg-[#faf9ff] border border-[#f0ecfa]">

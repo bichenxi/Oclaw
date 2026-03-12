@@ -475,6 +475,14 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
             let screen = parser.screen();
             let screen_text = screen.contents();
             let cursor_row = screen.cursor_position().0;
+
+            #[derive(Clone, serde::Serialize)]
+            struct WizardScreen { text: String, cursor_row: u16 }
+            let _ = app_emit.emit("wizard:screen", WizardScreen {
+                text: screen_text.clone(),
+                cursor_row,
+            });
+
             if let Some(prompt) = parse_screen_for_prompt(&screen_text, cursor_row) {
                 let prompt_key = format!(
                     "{}:{}:{:?}:{}:{:?}:{:?}",
