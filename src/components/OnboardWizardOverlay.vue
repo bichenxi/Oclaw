@@ -31,6 +31,84 @@ const msQuestion = ref('')
 const selCursor = ref(0)
 const selQuestion = ref('')
 
+/** 是否显示中文翻译 */
+const showChinese = ref(true)
+
+const i18nMap: Record<string, string> = {
+  // ── 问题 ──
+  'I understand this is personal-by-default and shared/multi-user use requires lock-down. Continue?':
+    '我了解这是默认个人使用模式，共享/多用户需要额外锁定。是否继续？',
+  'Onboarding mode': '初始化模式',
+  'Config handling': '配置处理方式',
+  'Model/auth provider': '模型 / 认证提供商',
+  'MiniMax auth method': 'MiniMax 认证方式',
+  'How do you want to provide this API key?': '如何提供此 API Key？',
+  'Enter MiniMax China API key': '输入 MiniMax 中国区 API Key',
+  'Default model': '默认模型',
+  'Select channel (QuickStart)': '选择消息通道（快速配置）',
+  'Search provider': '搜索引擎',
+  'Configure skills now? (recommended)': '现在配置技能？（推荐）',
+  'Enable hooks?': '启用钩子？',
+
+  // ── 选项 ──
+  'Yes': '是',
+  'No': '否',
+  'QuickStart (Configure details later via openclaw configure.)':
+    '快速配置（稍后通过 openclaw configure 调整详情）',
+  'Manual': '手动配置',
+  'Use existing values': '使用现有值',
+  'Update values': '更新值',
+  'Reset': '重置',
+  'Paste API key now (Stores the key directly in OpenClaw config)':
+    '现在粘贴 API Key（直接存储到 OpenClaw 配置中）',
+  'Use external secret provider': '使用外部密钥管理',
+  'Skip for now': '暂时跳过',
+  '🚀 boot-md (Run BOOT.md on gateway startup)': '🚀 boot-md（网关启动时运行 BOOT.md）',
+  '📎 bootstrap-extra-files': '📎 bootstrap-extra-files（引导附加文件）',
+  '📝 command-logger': '📝 command-logger（命令日志记录）',
+  '💾 session-memory': '💾 session-memory（会话记忆）',
+
+  'Keep current': '保持当前',
+  'Enter model': '输入模型名称',
+  'Gateway service already installed': '网关服务已安装',
+  'Restart': '重启',
+  'Reinstall': '重新安装',
+  'Skip': '跳过',
+  'How do you want to hatch your bot?': '如何孵化你的 Bot？',
+  'Hatch in TUI (recommended)': '在 TUI 中孵化（推荐）',
+  'Open the Web UI': '打开 Web UI',
+  'Do this later': '稍后再说',
+  'What do you want to set up?': '你想设置什么？',
+  'Workspace directory': '工作区目录',
+
+  // ── 通用 ──
+  'OpenAI (Codex OAuth + API key)': 'OpenAI（Codex OAuth + API Key）',
+  'MiniMax OAuth (Oauth plugin for MiniMax)': 'MiniMax OAuth（MiniMax OAuth 插件）',
+  'Telegram (Bot API) (recommended · newcomer-friendly)':
+    'Telegram（Bot API）（推荐 · 新手友好）',
+  'Brave Search (Structured results · country/language/time filters)':
+    'Brave Search（结构化结果 · 国家/语言/时间筛选）',
+}
+
+const i18nPrefixMap: Array<[string, string]> = [
+  ['Local gateway (this machine)', '本地网关（本机）'],
+  ['Remote gateway', '远程网关（仅信息）'],
+  ['Keep current (', '保持当前（'],
+]
+
+function t(text: string): string {
+  if (!showChinese.value) return text
+  const trimmed = text.trim()
+  const exact = i18nMap[trimmed]
+  if (exact) return exact
+  for (const [prefix, zhPrefix] of i18nPrefixMap) {
+    if (trimmed.startsWith(prefix)) {
+      return zhPrefix + trimmed.slice(prefix.length)
+    }
+  }
+  return text
+}
+
 function unlockSending() {
   sending.value = false
   if (sendingTimer) { clearTimeout(sendingTimer); sendingTimer = null }
@@ -277,15 +355,24 @@ function goToChat() {
                 </div>
               </div>
             </div>
-            <!-- 始终显示关闭按钮 -->
-            <button
-              class="w-7 h-7 flex-center rounded-lg text-[#9b8ec4] hover:bg-[#f5f3ff] hover:text-secondary transition cursor-pointer bg-transparent border-none"
-              @click="handleClose()"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
+            <div class="flex items-center gap-1.5">
+              <button
+                class="h-7 px-2 flex-center rounded-lg text-[10px] font-medium transition cursor-pointer border-none"
+                :class="showChinese ? 'bg-secondary/10 text-secondary' : 'bg-transparent text-[#9b8ec4] hover:bg-[#f5f3ff]'"
+                title="中英文切换"
+                @click="showChinese = !showChinese"
+              >
+                {{ showChinese ? '中' : 'EN' }}
+              </button>
+              <button
+                class="w-7 h-7 flex-center rounded-lg text-[#9b8ec4] hover:bg-[#f5f3ff] hover:text-secondary transition cursor-pointer bg-transparent border-none"
+                @click="handleClose()"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           <!-- Body -->
@@ -317,8 +404,8 @@ function goToChat() {
                 <polyline points="20 6 9 17 4 12" />
               </svg>
               <div>
-                <div class="text-[12px] text-[#6b5f8a]">{{ item.question }}</div>
-                <div class="text-[13px] font-medium text-secondary">{{ item.answer }}</div>
+                <div class="text-[12px] text-[#6b5f8a]">{{ t(item.question) }}</div>
+                <div class="text-[13px] font-medium text-secondary">{{ t(item.answer) }}</div>
               </div>
             </div>
 
@@ -326,7 +413,7 @@ function goToChat() {
             <template v-if="store.wizardPrompt && store.wizardRunning">
               <!-- Confirm -->
               <div v-if="store.wizardPrompt.prompt_type === 'confirm'" class="flex flex-col gap-3">
-                <p class="text-[13px] font-medium text-[#4a4568] m-0">{{ store.wizardPrompt.question }}</p>
+                <p class="text-[13px] font-medium text-[#4a4568] m-0">{{ t(store.wizardPrompt.question) }}</p>
                 <div class="flex gap-3">
                   <button
                     v-for="(opt, i) in store.wizardPrompt.options"
@@ -339,14 +426,14 @@ function goToChat() {
                       : 'border-[#e8e2f4] text-[#6b5f8a] hover:border-secondary/30 hover:bg-secondary/5'"
                     @click="answerConfirm(i)"
                   >
-                    {{ opt }}
+                    {{ t(opt) }}
                   </button>
                 </div>
               </div>
 
               <!-- Select -->
               <div v-else-if="store.wizardPrompt.prompt_type === 'select'" class="flex flex-col gap-2">
-                <p class="text-[13px] font-medium text-[#4a4568] m-0">{{ store.wizardPrompt.question }}</p>
+                <p class="text-[13px] font-medium text-[#4a4568] m-0">{{ t(store.wizardPrompt.question) }}</p>
                 <button
                   v-for="(opt, i) in store.wizardPrompt.options"
                   :key="i"
@@ -361,13 +448,13 @@ function goToChat() {
                   <span class="w-4 h-4 rounded-full border-2 flex-center shrink-0" :class="store.wizardPrompt.selected === i ? 'border-secondary bg-secondary' : 'border-[#c4bdd8]'">
                     <span v-if="store.wizardPrompt.selected === i" class="w-1.5 h-1.5 rounded-full bg-white" />
                   </span>
-                  <span class="text-[13px] font-medium">{{ opt }}</span>
+                  <span class="text-[13px] font-medium">{{ t(opt) }}</span>
                 </button>
               </div>
 
               <!-- Multiselect：本地光标/勾选 + 导航按钮 -->
               <div v-else-if="store.wizardPrompt.prompt_type === 'multiselect'" class="flex flex-col gap-3">
-                <p class="text-[13px] font-medium text-[#4a4568] m-0">{{ store.wizardPrompt.question }}</p>
+                <p class="text-[13px] font-medium text-[#4a4568] m-0">{{ t(store.wizardPrompt.question) }}</p>
 
                 <div class="flex flex-col rounded-xl border border-[#e8e2f4] overflow-hidden">
                   <div
@@ -385,7 +472,7 @@ function goToChat() {
                         <polyline points="20 6 9 17 4 12" />
                       </svg>
                     </div>
-                    <span class="text-[13px]" :class="msChecked.includes(i) ? 'text-secondary font-medium' : 'text-[#4a4568]'">{{ opt }}</span>
+                    <span class="text-[13px]" :class="msChecked.includes(i) ? 'text-secondary font-medium' : 'text-[#4a4568]'">{{ t(opt) }}</span>
                   </div>
                 </div>
 
@@ -420,7 +507,7 @@ function goToChat() {
                     @click="sendToggle()"
                   >
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12" /></svg>
-                    切换✅
+                    切换
                   </button>
                   <div class="flex-1" />
                   <button
@@ -437,7 +524,7 @@ function goToChat() {
 
               <!-- Input / Password -->
               <div v-else-if="store.wizardPrompt.prompt_type === 'input' || store.wizardPrompt.prompt_type === 'password'" class="flex flex-col gap-3">
-                <p class="text-[13px] font-medium text-[#4a4568] m-0">{{ store.wizardPrompt.question }}</p>
+                <p class="text-[13px] font-medium text-[#4a4568] m-0">{{ t(store.wizardPrompt.question) }}</p>
                 <input
                   v-model="store.wizardInputValue"
                   :type="store.wizardPrompt.prompt_type === 'password' ? 'password' : 'text'"
@@ -461,12 +548,12 @@ function goToChat() {
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <polyline points="20 6 9 17 4 12" />
                 </svg>
-                <span class="text-[13px] font-medium">{{ store.wizardPrompt.question }}</span>
+                <span class="text-[13px] font-medium">{{ t(store.wizardPrompt.question) }}</span>
               </div>
 
               <!-- Info / 未知类型 -->
               <div v-else class="px-4 py-3 rounded-xl bg-[#faf9ff] border border-[#f0ecfa] text-[12px] text-[#6b5f8a]">
-                {{ store.wizardPrompt.question }}
+                {{ t(store.wizardPrompt.question) }}
               </div>
             </template>
 
