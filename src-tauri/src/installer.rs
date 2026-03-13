@@ -124,6 +124,7 @@ fn detect_system_fnm() -> bool {
 /// 综合检测，返回最合适的安装策略。
 /// 优先使用版本管理器（nvm/fnm），确保安装后能设为默认版本。
 fn detect_node_strategy(home_dir: &std::path::Path) -> NodeStrategy {
+    let _ = home_dir; // used only on Unix; suppress warning on Windows
     // 1. 系统 nvm？
     //    Unix: ~/.nvm/nvm.sh 存在
     //    Windows: nvm-windows 在 %APPDATA%\nvm 或 PATH 中

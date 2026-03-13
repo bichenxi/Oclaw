@@ -182,29 +182,28 @@ function copyCommand() {
         </button>
 
         <!-- 次级：重新配置向导 -->
-        <template v-if="!isWindows">
-          <div class="flex items-center gap-3 w-full max-w-[440px] mb-4">
-            <div class="flex-1 h-px bg-[#e8e2f4]" />
-            <span class="text-[11px] text-[#c4bdd8] shrink-0">或重新运行配置向导</span>
-            <div class="flex-1 h-px bg-[#e8e2f4]" />
-          </div>
-          <div class="w-full max-w-[440px] flex gap-3">
-            <button
-              type="button"
-              class="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-white rounded-xl border border-[#e8e2f4] text-[12px] text-[#8a80a7] cursor-pointer transition hover:text-secondary hover:border-secondary/30 hover:bg-secondary/5"
-              @click="onboardStore.openWizard()"
-            >
-              可视化配置
-            </button>
-            <button
-              type="button"
-              class="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-white rounded-xl border border-[#e8e2f4] text-[12px] text-[#8a80a7] cursor-pointer transition hover:text-secondary hover:border-secondary/30 hover:bg-secondary/5"
-              @click="onboardStore.open()"
-            >
-              内嵌终端
-            </button>
-          </div>
-        </template>
+        <div class="flex items-center gap-3 w-full max-w-[440px] mb-4">
+          <div class="flex-1 h-px bg-[#e8e2f4]" />
+          <span class="text-[11px] text-[#c4bdd8] shrink-0">或重新运行配置向导</span>
+          <div class="flex-1 h-px bg-[#e8e2f4]" />
+        </div>
+        <div class="w-full max-w-[440px] flex gap-3">
+          <button
+            type="button"
+            class="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-white rounded-xl border border-[#e8e2f4] text-[12px] text-[#8a80a7] cursor-pointer transition hover:text-secondary hover:border-secondary/30 hover:bg-secondary/5"
+            @click="onboardStore.openWizard()"
+          >
+            可视化配置
+          </button>
+          <button
+            v-if="!isWindows"
+            type="button"
+            class="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-white rounded-xl border border-[#e8e2f4] text-[12px] text-[#8a80a7] cursor-pointer transition hover:text-secondary hover:border-secondary/30 hover:bg-secondary/5"
+            @click="onboardStore.open()"
+          >
+            内嵌终端
+          </button>
+        </div>
       </template>
 
       <!-- ── 未 onboard：需要初始化向导 ── -->
@@ -218,7 +217,7 @@ function copyCommand() {
         </div>
 
         <!-- 配置向导选择区 -->
-        <div v-if="!isWindows" class="w-full max-w-[440px] flex gap-3 mb-5">
+        <div class="w-full max-w-[440px] flex gap-3 mb-5">
           <!-- 可视化配置 -->
           <button
             type="button"
@@ -242,8 +241,9 @@ function copyCommand() {
             </svg>
           </button>
 
-          <!-- 内嵌终端 -->
+          <!-- 内嵌终端（仅 macOS / Linux） -->
           <button
+            v-if="!isWindows"
             type="button"
             class="group flex-1 flex flex-col items-center gap-3 p-5 bg-white rounded-2xl border-2 border-[#e8e2f4] cursor-pointer transition-all hover:border-[#c4bdd8] hover:shadow-[0_4px_20px_rgba(26,16,48,0.08)] active:scale-[0.98]"
             @click="onboardStore.open()"
@@ -264,8 +264,8 @@ function copyCommand() {
           </button>
         </div>
 
-        <!-- 分隔线（Unix 有向导时显示） -->
-        <div v-if="!isWindows" class="flex items-center gap-3 w-full max-w-[440px] mb-4">
+        <!-- 分隔线 -->
+        <div class="flex items-center gap-3 w-full max-w-[440px] mb-4">
           <div class="flex-1 h-px bg-[#e8e2f4]" />
           <span class="text-[11px] text-[#c4bdd8] shrink-0">或复制命令手动执行</span>
           <div class="flex-1 h-px bg-[#e8e2f4]" />
@@ -367,68 +367,43 @@ function copyCommand() {
             <span class="font-medium">OpenClaw 安装完成，请继续完成初始化配置</span>
           </div>
 
-          <!-- Unix: 可视化 / 终端 -->
-          <template v-if="!isWindows">
-            <div class="flex gap-3 mb-4">
-              <button
-                type="button"
-                class="group flex-1 flex flex-col items-center gap-2.5 p-4 bg-white rounded-2xl border-2 border-secondary/20 cursor-pointer transition-all hover:border-secondary/50 hover:shadow-[0_4px_20px_rgba(95,71,206,0.12)] active:scale-[0.98]"
-                @click="onboardStore.openWizard()"
-              >
-                <div class="w-10 h-10 rounded-[12px] bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] flex-center shadow-[0_4px_14px_rgba(95,71,206,0.3)]">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                    <line x1="3" y1="9" x2="21" y2="9" />
-                    <line x1="9" y1="21" x2="9" y2="9" />
-                  </svg>
-                </div>
-                <div class="text-center">
-                  <div class="text-[12px] font-bold text-[#2d1f6e]">可视化配置</div>
-                  <span class="inline-block text-[9px] font-semibold text-white bg-secondary px-1.5 py-px rounded-full mt-0.5">推荐</span>
-                </div>
-              </button>
-              <button
-                type="button"
-                class="group flex-1 flex flex-col items-center gap-2.5 p-4 bg-white rounded-2xl border-2 border-[#e8e2f4] cursor-pointer transition-all hover:border-[#c4bdd8] hover:shadow-[0_4px_20px_rgba(26,16,48,0.08)] active:scale-[0.98]"
-                @click="onboardStore.open()"
-              >
-                <div class="w-10 h-10 rounded-[12px] bg-[#1a1030] flex-center shadow-[0_4px_14px_rgba(26,16,48,0.25)]">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="4 17 10 11 4 5" />
-                    <line x1="12" y1="19" x2="20" y2="19" />
-                  </svg>
-                </div>
-                <div class="text-center">
-                  <div class="text-[12px] font-bold text-[#2d1f6e]">内嵌终端</div>
-                  <div class="text-[10px] text-[#9b8ec4] mt-0.5">macOS / Linux</div>
-                </div>
-              </button>
-            </div>
-          </template>
-
-          <!-- Windows: 提示手动执行 -->
-          <template v-else>
-            <p class="text-[12px] text-[#7b6aa8] m-0 mb-3">请在终端中执行以下命令完成初始化：</p>
-            <div class="flex items-center gap-2 bg-[#1a1030] rounded-xl px-5 py-3.5 mb-4">
-              <code class="flex-1 text-green-400 font-mono text-[14px] select-all">openclaw onboard</code>
-              <button
-                class="flex-shrink-0 text-[#9b8ec4] hover:text-white transition-colors cursor-pointer bg-transparent border-none p-0"
-                title="复制命令"
-                @click="copyCommand"
-              >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          <!-- 可视化配置 / 内嵌终端 -->
+          <div class="flex gap-3 mb-4">
+            <button
+              type="button"
+              class="group flex-1 flex flex-col items-center gap-2.5 p-4 bg-white rounded-2xl border-2 border-secondary/20 cursor-pointer transition-all hover:border-secondary/50 hover:shadow-[0_4px_20px_rgba(95,71,206,0.12)] active:scale-[0.98]"
+              @click="onboardStore.openWizard()"
+            >
+              <div class="w-10 h-10 rounded-[12px] bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] flex-center shadow-[0_4px_14px_rgba(95,71,206,0.3)]">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <line x1="3" y1="9" x2="21" y2="9" />
+                  <line x1="9" y1="21" x2="9" y2="9" />
                 </svg>
-              </button>
-            </div>
-            <p v-if="notAliveHint" class="text-[12px] text-red-500 mb-3 m-0">
-              仍未检测到 OpenClaw，请确认命令已执行完毕。
-            </p>
-            <button class="btn w-full" :disabled="checking" @click="handleCheckAlive">
-              {{ checking ? '检测中...' : '我已完成配置，检测连接' }}
+              </div>
+              <div class="text-center">
+                <div class="text-[12px] font-bold text-[#2d1f6e]">可视化配置</div>
+                <span class="inline-block text-[9px] font-semibold text-white bg-secondary px-1.5 py-px rounded-full mt-0.5">推荐</span>
+              </div>
             </button>
-          </template>
+            <button
+              v-if="!isWindows"
+              type="button"
+              class="group flex-1 flex flex-col items-center gap-2.5 p-4 bg-white rounded-2xl border-2 border-[#e8e2f4] cursor-pointer transition-all hover:border-[#c4bdd8] hover:shadow-[0_4px_20px_rgba(26,16,48,0.08)] active:scale-[0.98]"
+              @click="onboardStore.open()"
+            >
+              <div class="w-10 h-10 rounded-[12px] bg-[#1a1030] flex-center shadow-[0_4px_14px_rgba(26,16,48,0.25)]">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="4 17 10 11 4 5" />
+                  <line x1="12" y1="19" x2="20" y2="19" />
+                </svg>
+              </div>
+              <div class="text-center">
+                <div class="text-[12px] font-bold text-[#2d1f6e]">内嵌终端</div>
+                <div class="text-[10px] text-[#9b8ec4] mt-0.5">macOS / Linux</div>
+              </div>
+            </button>
+          </div>
         </div>
       </template>
 

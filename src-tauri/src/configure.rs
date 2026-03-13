@@ -35,6 +35,7 @@ pub async fn run_onboard(app: AppHandle, params: OnboardParams) -> Result<(), St
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
 
+    #[cfg(not(target_os = "windows"))]
     let shell = detect_login_shell();
 
     let mut args = vec![
