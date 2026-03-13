@@ -74,7 +74,7 @@ async function load() {
 }
 
 async function switchWorkspace(ws: string) {
-  if (ws === currentWorkspace.value) return
+  // v-model 已更新 currentWorkspace，直接重置选中状态并加载新 workspace 内容
   currentWorkspace.value = ws
   selectedSkill.value = null
   fileContent.value = ''
@@ -257,26 +257,14 @@ onMounted(load)
       </div>
 
       <div class="flex items-center gap-2">
-        <!-- Workspace selector（多 workspace 时显示） -->
-        <div v-if="workspaces.length > 1" class="flex items-center gap-1 p-[3px] bg-[#f5f2fc] rounded-[8px]">
-          <button
-            v-for="ws in workspaces"
-            :key="ws"
-            type="button"
-            class="px-2.5 py-[5px] text-[11px] font-medium rounded-[6px] cursor-pointer transition whitespace-nowrap"
-            :class="currentWorkspace === ws
-              ? 'bg-white text-secondary shadow-[0_1px_4px_rgba(95,71,206,0.15)]'
-              : 'text-[#9b8ec4] hover:text-secondary'"
-            @click="switchWorkspace(ws)"
-          >{{ ws }}</button>
-        </div>
-        <!-- 单 workspace 时仅展示标签，不可点击 -->
-        <div v-else-if="workspaces.length === 1" class="flex items-center gap-1.5 px-2.5 py-[5px] text-[11px] text-[#9b8ec4] bg-[#f5f2fc] rounded-[7px]">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
-          </svg>
-          {{ currentWorkspace }}
-        </div>
+        <!-- Workspace 下拉选择器 -->
+        <select
+          v-model="currentWorkspace"
+          class="ws-select px-2.5 py-[6px] text-[12px] text-[#4a4568] bg-[#f5f2fc] border border-[#e0d9f5] rounded-[8px] outline-none cursor-pointer transition hover:border-secondary/40 focus:border-secondary focus:shadow-[0_0_0_2px_rgba(95,71,206,0.1)]"
+          @change="switchWorkspace(currentWorkspace)"
+        >
+          <option v-for="ws in workspaces" :key="ws" :value="ws">{{ ws }}</option>
+        </select>
 
         <button
           type="button"
@@ -646,6 +634,7 @@ onMounted(load)
 .skill-list::-webkit-scrollbar-thumb { background: rgba(95,71,206,0.12); border-radius: 2px; }
 .sk-editor::-webkit-scrollbar { width: 5px; }
 .sk-editor::-webkit-scrollbar-thumb { background: rgba(95,71,206,0.1); border-radius: 3px; }
+.ws-select { appearance: none; -webkit-appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239b8ec4' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 8px center; padding-right: 26px; }
 
 .dialog-enter-active, .dialog-leave-active { transition: opacity 0.15s ease; }
 .dialog-enter-from, .dialog-leave-to { opacity: 0; }
