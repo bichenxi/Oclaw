@@ -48,5 +48,19 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  return { bearerToken, sessionKey, baseUrl, currentProfile, loadForProfile, save }
+  /**
+   * Generates a new session key (appending a timestamp suffix) so that
+   * the next OpenClaw request creates a fresh session which reloads
+   * the latest skills from openclaw.json. Returns the new key.
+   */
+  function bumpSession(): string {
+    const current = sessionKey.value
+    const base = current.replace(/_\d+$/, '')
+    const newKey = `${base}_${Date.now()}`
+    sessionKey.value = newKey
+    localStorage.setItem(sessionKeyStorageKey(currentProfile.value), newKey)
+    return newKey
+  }
+
+  return { bearerToken, sessionKey, baseUrl, currentProfile, loadForProfile, save, bumpSession }
 })

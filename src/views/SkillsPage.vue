@@ -9,8 +9,23 @@ import {
   deleteSkillFile,
   checkBuiltinSkillInstalled,
   installBuiltinSkill,
+  syncSkillsToConfig,
+  getSkillTriggers,
+  setSkillTriggers,
   type SkillMeta,
+  type SyncResult,
 } from '@/api/skills'
+import { useSettingsStore } from '@/stores/settings'
+
+const settings = useSettingsStore()
+
+function bumpSessionKey() {
+  const current = settings.sessionKey
+  const base = current.replace(/_\d+$/, '')
+  const newKey = `${base}_${Date.now()}`
+  settings.sessionKey = newKey
+  localStorage.setItem(`openclaw_session_key:${settings.currentProfile}`, newKey)
+}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const workspaces = ref<string[]>([])
@@ -32,12 +47,21 @@ const creating = ref(false)
 const showNewFile = ref(false)
 const newFileName = ref('')
 
+// Triggers
+const triggers = ref<string[]>([])
+const triggerInput = ref('')
+
 // Built-in skill
 const builtinInstalled = ref(false)
 const installing = ref(false)
 
 // Confirm delete modal
 const confirmDelete = ref<{ type: 'skill' | 'file'; name: string } | null>(null)
+
+// Sync & session refresh
+const lastSyncResult = ref<SyncResult | null>(null)
+const showRestartHint = ref(false)
+const sessionRefreshed = ref(false)
 
 // Right-click context menu
 const ctxMenu = ref<{ x: number; y: number; skill: SkillMeta } | null>(null)
@@ -102,6 +126,11 @@ async function doInstallBuiltin() {
 async function selectSkill(skill: SkillMeta) {
   selectedSkill.value = skill
   selectedFile.value = skill.files.includes('SKILL.md') ? 'SKILL.md' : (skill.files[0] ?? '')
+  triggers.value = []
+  triggerInput.value = ''
+  try {
+    triggers.value = await getSkillTriggers(skill.name)
+  } catch (_) { /* skill may not be registered yet */ }
   await loadFile()
 }
 
@@ -121,6 +150,29 @@ async function loadFile() {
   }
 }
 
+// ── Triggers ─────────────────────────────────────────────────────────────────
+function addTrigger() {
+  const val = triggerInput.value.trim()
+  if (val && !triggers.value.includes(val)) {
+    triggers.value.push(val)
+  }
+  triggerInput.value = ''
+}
+
+function removeTrigger(index: number) {
+  triggers.value.splice(index, 1)
+}
+
+function handleTriggerKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' || e.key === ',') {
+    e.preventDefault()
+    addTrigger()
+  }
+  if (e.key === 'Backspace' && !triggerInput.value && triggers.value.length > 0) {
+    triggers.value.pop()
+  }
+}
+
 // ── Save ──────────────────────────────────────────────────────────────────────
 async function save() {
   if (!selectedSkill.value || !selectedFile.value || saving.value) return
@@ -130,6 +182,27 @@ async function save() {
     await writeSkillFile(currentWorkspace.value, selectedSkill.value.name, selectedFile.value, fileContent.value)
     saved.value = true
     setTimeout(() => { saved.value = false }, 2000)
+  } catch (e) {
+    error.value = String(e)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function saveAndSync() {
+  if (!selectedSkill.value || !selectedFile.value || saving.value) return
+  saving.value = true
+  error.value = ''
+  try {
+    await writeSkillFile(currentWorkspace.value, selectedSkill.value.name, selectedFile.value, fileContent.value)
+    await setSkillTriggers(selectedSkill.value.name, triggers.value)
+    lastSyncResult.value = await syncSkillsToConfig()
+    bumpSessionKey()
+    saved.value = true
+    sessionRefreshed.value = true
+    showRestartHint.value = true
+    setTimeout(() => { saved.value = false }, 2000)
+    setTimeout(() => { showRestartHint.value = false; sessionRefreshed.value = false }, 3000)
   } catch (e) {
     error.value = String(e)
   } finally {
@@ -147,6 +220,8 @@ async function doCreateSkill() {
     await createSkill(currentWorkspace.value, name)
     newSkillName.value = ''
     showNewSkill.value = false
+    showRestartHint.value = true
+    lastSyncResult.value = { added: [name], removed: [] }
     await load()
     const created = skills.value.find(s => s.name === name)
     if (created) await selectSkill(created)
@@ -181,11 +256,14 @@ async function doDelete() {
   error.value = ''
   try {
     if (confirmDelete.value.type === 'skill') {
-      await deleteSkill(currentWorkspace.value, confirmDelete.value.name)
-      if (selectedSkill.value?.name === confirmDelete.value.name) {
+      const deletedName = confirmDelete.value.name
+      await deleteSkill(currentWorkspace.value, deletedName)
+      if (selectedSkill.value?.name === deletedName) {
         selectedSkill.value = null
         fileContent.value = ''
       }
+      showRestartHint.value = true
+      lastSyncResult.value = { added: [], removed: [deletedName] }
     } else if (selectedSkill.value) {
       await deleteSkillFile(currentWorkspace.value, selectedSkill.value.name, confirmDelete.value.name)
       if (selectedFile.value === confirmDelete.value.name) {
@@ -199,6 +277,15 @@ async function doDelete() {
     error.value = String(e)
     confirmDelete.value = null
   }
+}
+
+function doRefreshSession() {
+  bumpSessionKey()
+  sessionRefreshed.value = true
+  setTimeout(() => {
+    showRestartHint.value = false
+    sessionRefreshed.value = false
+  }, 3000)
 }
 
 // ── Context menu ──────────────────────────────────────────────────────────────
@@ -289,6 +376,50 @@ onMounted(load)
         <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
       </svg>
       {{ error }}
+    </div>
+
+    <!-- ── Sync result / session refresh hint ─────────────────────────── -->
+    <div
+      v-if="showRestartHint"
+      class="shrink-0 flex items-center justify-between px-5 py-2.5 text-[12px] border-b transition-colors"
+      :class="sessionRefreshed
+        ? 'bg-[rgba(34,197,94,0.06)] border-[rgba(34,197,94,0.15)]'
+        : 'bg-[rgba(245,158,11,0.06)] border-[rgba(245,158,11,0.15)]'"
+    >
+      <div class="flex items-center gap-2" :class="sessionRefreshed ? 'text-[#16a34a]' : 'text-[#b45309]'">
+        <svg v-if="!sessionRefreshed" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+        </svg>
+        <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+        <span v-if="sessionRefreshed">会话已刷新，下次对话将使用新技能</span>
+        <span v-else>
+          配置已更新
+          <template v-if="lastSyncResult">
+            <template v-if="lastSyncResult.added.length">（新增: {{ lastSyncResult.added.join(', ') }}）</template>
+            <template v-if="lastSyncResult.removed.length">（移除: {{ lastSyncResult.removed.join(', ') }}）</template>
+          </template>
+          — 需刷新会话以在对话中生效
+        </span>
+      </div>
+      <div v-if="!sessionRefreshed" class="flex items-center gap-2">
+        <button
+          type="button"
+          class="flex items-center gap-1.5 px-3 py-[5px] text-[12px] font-medium text-white bg-[linear-gradient(135deg,#7c5cfc,#5f47ce)] rounded-[7px] cursor-pointer transition hover:opacity-85 shadow-[0_1px_6px_rgba(95,71,206,0.25)]"
+          @click="doRefreshSession"
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10" /><path d="M20.49 15A9 9 0 1 1 21 12" />
+          </svg>
+          刷新会话
+        </button>
+        <button
+          type="button"
+          class="px-2 py-[5px] text-[12px] text-[#b45309]/60 cursor-pointer hover:text-[#b45309] transition"
+          @click="showRestartHint = false"
+        >忽略</button>
+      </div>
     </div>
 
     <!-- ── Body ───────────────────────────────────────────────────────────── -->
@@ -491,6 +622,35 @@ onMounted(load)
             <span class="text-[#c4bdd8] mr-1">描述</span>{{ selectedSkill.description }}
           </div>
 
+          <!-- Triggers bar -->
+          <div class="shrink-0 flex items-center gap-2 px-4 py-2 bg-[#faf8ff] border-b border-[#f0ecfa]">
+            <span class="shrink-0 text-[11px] font-semibold text-[#b8b0cc] uppercase tracking-[0.5px]">触发词</span>
+            <div class="flex-1 flex items-center flex-wrap gap-1.5 min-h-[28px] px-2.5 py-1 bg-white border border-[#e8e2f4] rounded-[7px] cursor-text transition focus-within:border-secondary focus-within:shadow-[0_0_0_2px_rgba(95,71,206,0.08)]">
+              <span
+                v-for="(tag, idx) in triggers"
+                :key="idx"
+                class="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-medium text-secondary bg-secondary/8 border border-secondary/15 rounded-[5px] select-none"
+              >
+                {{ tag }}
+                <button
+                  type="button"
+                  class="w-3.5 h-3.5 flex items-center justify-center rounded-full text-secondary/50 hover:text-white hover:bg-secondary/60 transition cursor-pointer"
+                  @click="removeTrigger(idx)"
+                >
+                  <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                </button>
+              </span>
+              <input
+                v-model="triggerInput"
+                type="text"
+                class="flex-1 min-w-[80px] py-0.5 text-[12px] bg-transparent outline-none border-none placeholder-[#c4bdd8]"
+                placeholder="输入触发词后回车…"
+                @keydown="handleTriggerKeydown"
+                @blur="addTrigger"
+              />
+            </div>
+          </div>
+
           <!-- Editor -->
           <textarea
             v-model="fileContent"
@@ -504,7 +664,7 @@ onMounted(load)
           <div class="shrink-0 flex items-center justify-between px-4 py-2.5 border-t border-[#e8e2f4] bg-[#faf8ff]">
             <div class="flex items-center gap-1.5 text-[11px] text-[#c4bdd8] font-mono min-w-0 overflow-hidden">
               <span class="truncate">{{ selectedSkill.name }}<span class="mx-1 opacity-50">/</span>{{ selectedFile }}</span>
-              <span class="shrink-0 opacity-60 ml-1">· ⌘S 保存</span>
+              <span class="shrink-0 opacity-60 ml-1">· ⌘S 仅保存</span>
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <!-- Delete current file (only for non-SKILL.md) -->
@@ -524,12 +684,25 @@ onMounted(load)
               <!-- Save button -->
               <button
                 type="button"
+                class="flex items-center gap-[7px] px-4 py-[7px] text-[13px] font-medium text-[#4a4568] bg-white border border-[#e0d9f5] rounded-[8px] cursor-pointer transition disabled:opacity-50 hover:bg-[#f5f2fc]"
+                :disabled="saving"
+                @click="save"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+                  <polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" />
+                </svg>
+                {{ saving ? '保存中…' : '仅保存' }}
+              </button>
+              <!-- Save & sync button -->
+              <button
+                type="button"
                 class="flex items-center gap-[7px] px-4 py-[7px] text-[13px] font-medium text-white rounded-[8px] cursor-pointer transition disabled:opacity-50"
                 :class="saved
                   ? 'bg-[linear-gradient(135deg,#22c55e,#16a34a)] shadow-[0_2px_8px_rgba(34,197,94,0.22)]'
                   : 'bg-[linear-gradient(135deg,#7c5cfc,#5f47ce)] shadow-[0_2px_8px_rgba(95,71,206,0.2)] hover:shadow-[0_4px_14px_rgba(95,71,206,0.3)] hover:-translate-y-px active:translate-y-0'"
                 :disabled="saving"
-                @click="save"
+                @click="saveAndSync"
               >
                 <svg v-if="!saved" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
@@ -538,7 +711,7 @@ onMounted(load)
                 <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="20 6 9 17 4 12" />
                 </svg>
-                {{ saved ? '已保存' : saving ? '保存中…' : '保存' }}
+                {{ saved ? '已同步' : saving ? '同步中…' : '保存并同步' }}
               </button>
             </div>
           </div>

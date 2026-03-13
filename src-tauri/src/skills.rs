@@ -32,6 +32,12 @@ pub struct SkillMeta {
     pub files: Vec<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct SyncResult {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
+
 
 // ── Frontmatter parser ───────────────────────────────────────────────────────
 
@@ -76,49 +82,226 @@ pub fn install_builtin_skill(app: AppHandle, workspace: String) -> Result<(), St
     let dir = skills_dir_for(&app, &workspace)?.join(BUILTIN_SKILL_NAME);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     fs::write(dir.join("SKILL.md"), BUILTIN_SKILL_MD).map_err(|e| e.to_string())?;
-    register_skill_in_openclaw(&app)?;
+    register_skill_in_config(&app, BUILTIN_SKILL_NAME)?;
     Ok(())
 }
 
-/// Adds claw-browser-control to skills.entries in ~/.openclaw/openclaw.json
-/// and also ensures `exec` is in tools.alsoAllow.
-fn register_skill_in_openclaw(app: &AppHandle) -> Result<(), String> {
+// ── openclaw.json skill registration ─────────────────────────────────────────
+
+fn openclaw_config_path(app: &AppHandle) -> Result<PathBuf, String> {
     let home = app.path().home_dir().map_err(|e| e.to_string())?;
-    let config_path = home.join(".openclaw").join("openclaw.json");
+    Ok(home.join(".openclaw").join("openclaw.json"))
+}
+
+fn read_openclaw_config(path: &PathBuf) -> Result<serde_json::Value, String> {
+    if !path.exists() {
+        return Err("~/.openclaw/openclaw.json 不存在".to_string());
+    }
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    serde_json::from_str(&content).map_err(|e| e.to_string())
+}
+
+fn write_openclaw_config(path: &PathBuf, json: &serde_json::Value) -> Result<(), String> {
+    let pretty = serde_json::to_string_pretty(json).map_err(|e| e.to_string())?;
+    fs::write(path, pretty).map_err(|e| e.to_string())
+}
+
+/// Ensures `skills.entries` object exists in the JSON, creating intermediate
+/// keys as needed. Returns a mutable reference to the entries map.
+fn ensure_skill_entries(json: &mut serde_json::Value) -> &mut serde_json::Map<String, serde_json::Value> {
+    let obj = json.as_object_mut().expect("config must be an object");
+    obj.entry("skills")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .unwrap()
+        .entry("entries")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .unwrap()
+}
+
+/// Registers a skill in `skills.entries` and ensures `exec` is in `tools.alsoAllow`.
+fn register_skill_in_config(app: &AppHandle, skill_name: &str) -> Result<(), String> {
+    let config_path = openclaw_config_path(app)?;
     if !config_path.exists() {
         return Ok(());
     }
-    let content = fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
-    let mut json: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    let mut json = read_openclaw_config(&config_path)?;
 
-    // Register skill in skills.entries
+    let entries = ensure_skill_entries(&mut json);
+    if !entries.contains_key(skill_name) {
+        entries.insert(
+            skill_name.to_string(),
+            serde_json::json!({ "enabled": true }),
+        );
+    }
+
+    // Ensure exec is in tools.alsoAllow (needed for curl-based skills)
+    let obj = json.as_object_mut().unwrap();
+    let also_allow = obj
+        .entry("tools")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .unwrap()
+        .entry("alsoAllow")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .unwrap();
+    if !also_allow.iter().any(|v| v.as_str() == Some("exec")) {
+        also_allow.push(serde_json::json!("exec"));
+    }
+
+    write_openclaw_config(&config_path, &json)
+}
+
+/// Removes a skill from `skills.entries`.
+fn unregister_skill_from_config(app: &AppHandle, skill_name: &str) -> Result<(), String> {
+    let config_path = openclaw_config_path(app)?;
+    if !config_path.exists() {
+        return Ok(());
+    }
+    let mut json = read_openclaw_config(&config_path)?;
+
     if let Some(entries) = json
         .get_mut("skills")
         .and_then(|s| s.get_mut("entries"))
         .and_then(|e| e.as_object_mut())
     {
-        if !entries.contains_key(BUILTIN_SKILL_NAME) {
-            entries.insert(
-                BUILTIN_SKILL_NAME.to_string(),
-                serde_json::json!({ "enabled": true }),
-            );
+        entries.remove(skill_name);
+    }
+
+    write_openclaw_config(&config_path, &json)
+}
+
+/// Reads the `triggers` array for a skill from openclaw.json.
+#[tauri::command]
+pub fn get_skill_triggers(app: AppHandle, skill_name: String) -> Result<Vec<String>, String> {
+    let config_path = openclaw_config_path(&app)?;
+    if !config_path.exists() {
+        return Ok(vec![]);
+    }
+    let json = read_openclaw_config(&config_path)?;
+    let triggers = json
+        .get("skills")
+        .and_then(|s| s.get("entries"))
+        .and_then(|e| e.get(&skill_name))
+        .and_then(|entry| entry.get("triggers"))
+        .and_then(|t| t.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(triggers)
+}
+
+/// Writes the `triggers` array for a skill in openclaw.json.
+/// Also ensures the skill entry exists and is enabled.
+#[tauri::command]
+pub fn set_skill_triggers(
+    app: AppHandle,
+    skill_name: String,
+    triggers: Vec<String>,
+) -> Result<(), String> {
+    let config_path = openclaw_config_path(&app)?;
+    if !config_path.exists() {
+        return Err("~/.openclaw/openclaw.json 不存在".to_string());
+    }
+    let mut json = read_openclaw_config(&config_path)?;
+    let entries = ensure_skill_entries(&mut json);
+
+    let entry = entries
+        .entry(skill_name)
+        .or_insert_with(|| serde_json::json!({ "enabled": true }));
+
+    if let Some(obj) = entry.as_object_mut() {
+        let trigger_values: Vec<serde_json::Value> = triggers
+            .into_iter()
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| serde_json::Value::String(t))
+            .collect();
+        if trigger_values.is_empty() {
+            obj.remove("triggers");
+        } else {
+            obj.insert("triggers".to_string(), serde_json::Value::Array(trigger_values));
         }
+    }
+
+    write_openclaw_config(&config_path, &json)
+}
+
+/// Scans all workspaces, collects every skill directory name, then syncs
+/// `skills.entries` in openclaw.json so that every on-disk skill is registered
+/// and stale entries for removed skills are cleaned up.
+#[tauri::command]
+pub fn sync_skills_to_config(app: AppHandle) -> Result<SyncResult, String> {
+    let config_path = openclaw_config_path(&app)?;
+    if !config_path.exists() {
+        return Err("~/.openclaw/openclaw.json 不存在，请先完成 OpenClaw 初始化".to_string());
+    }
+
+    let workspaces = list_workspaces(app.clone())?;
+    let mut on_disk: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for ws in &workspaces {
+        if let Ok(dir) = skills_dir_for(&app, ws) {
+            if dir.exists() {
+                if let Ok(rd) = fs::read_dir(&dir) {
+                    for entry in rd.filter_map(|e| e.ok()) {
+                        if entry.path().is_dir() {
+                            if let Some(name) = entry.file_name().to_str() {
+                                on_disk.insert(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut json = read_openclaw_config(&config_path)?;
+    let entries = ensure_skill_entries(&mut json);
+
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+
+    // Register all on-disk skills
+    for name in &on_disk {
+        if !entries.contains_key(name.as_str()) {
+            entries.insert(name.clone(), serde_json::json!({ "enabled": true }));
+            added.push(name.clone());
+        }
+    }
+
+    // Remove stale entries that no longer exist on disk
+    let stale: Vec<String> = entries
+        .keys()
+        .filter(|k| !on_disk.contains(k.as_str()))
+        .cloned()
+        .collect();
+    for key in &stale {
+        entries.remove(key);
+        removed.push(key.clone());
     }
 
     // Ensure exec is in tools.alsoAllow
-    if let Some(also_allow) = json
-        .get_mut("tools")
-        .and_then(|t| t.get_mut("alsoAllow"))
-        .and_then(|a| a.as_array_mut())
-    {
-        if !also_allow.iter().any(|v| v.as_str() == Some("exec")) {
-            also_allow.push(serde_json::json!("exec"));
-        }
+    let obj = json.as_object_mut().unwrap();
+    let also_allow = obj
+        .entry("tools")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .unwrap()
+        .entry("alsoAllow")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .unwrap();
+    if !also_allow.iter().any(|v| v.as_str() == Some("exec")) {
+        also_allow.push(serde_json::json!("exec"));
     }
 
-    let new_content = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
-    fs::write(&config_path, new_content).map_err(|e| e.to_string())
+    write_openclaw_config(&config_path, &json)?;
+
+    Ok(SyncResult { added, removed })
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
@@ -223,7 +406,8 @@ pub fn write_skill_file(
     fs::write(dir.join(&filename), content).map_err(|e| e.to_string())
 }
 
-/// Create a new skill directory with a template SKILL.md.
+/// Create a new skill directory with a template SKILL.md,
+/// and register it in ~/.openclaw/openclaw.json so OpenClaw can discover it.
 #[tauri::command]
 pub fn create_skill(app: AppHandle, workspace: String, skill_name: String) -> Result<(), String> {
     validate_name(&skill_name)?;
@@ -234,13 +418,15 @@ pub fn create_skill(app: AppHandle, workspace: String, skill_name: String) -> Re
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     let template = format!(
-        "---\nname: {name}\nversion: 1.0\ndescription: 描述这个技能的用途\n---\n\n# {name}\n\n> 在这里描述这个技能的功能、使用场景和操作方式。\n",
+        "---\nname: {name}\nversion: 1.0\ndescription: 描述这个技能的用途\nmetadata:\n  {{\"openclaw\": {{\"skillKey\": \"{name}\"}}}}\n---\n\n# {name}\n\n> 在这里描述这个技能的功能、使用场景和操作方式。\n",
         name = skill_name
     );
-    fs::write(dir.join("SKILL.md"), template).map_err(|e| e.to_string())
+    fs::write(dir.join("SKILL.md"), template).map_err(|e| e.to_string())?;
+    register_skill_in_config(&app, &skill_name)?;
+    Ok(())
 }
 
-/// Delete an entire skill directory.
+/// Delete an entire skill directory and unregister it from openclaw.json.
 #[tauri::command]
 pub fn delete_skill(app: AppHandle, workspace: String, skill_name: String) -> Result<(), String> {
     validate_name(&skill_name)?;
@@ -248,7 +434,19 @@ pub fn delete_skill(app: AppHandle, workspace: String, skill_name: String) -> Re
     if !dir.exists() {
         return Err(format!("技能 '{}' 不存在", skill_name));
     }
-    fs::remove_dir_all(&dir).map_err(|e| e.to_string())
+    fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    // Only unregister if no other workspace still has this skill
+    let workspaces = list_workspaces(app.clone()).unwrap_or_default();
+    let still_exists = workspaces.iter().any(|ws| {
+        skills_dir_for(&app, ws)
+            .map(|d| d.join(&skill_name).exists())
+            .unwrap_or(false)
+    });
+    if !still_exists {
+        unregister_skill_from_config(&app, &skill_name)?;
+    }
+    Ok(())
 }
 
 /// Delete a single file within a skill directory.
@@ -300,6 +498,3 @@ fn validate_workspace(name: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
-
-// ── Security: path traversal guards ──────────────────────────────────────────
