@@ -19,6 +19,9 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::ShellExt;
 
+/// npmmirror Node.js 发行版镜像，解决大陆用户从 nodejs.org 下载失败的问题。
+const NODE_DIST_MIRROR: &str = "https://npmmirror.com/mirrors/node";
+
 // ─── 状态 ──────────────────────────────────────────────────────────────────
 
 pub struct InstallerState {
@@ -239,7 +242,7 @@ async fn run_step(
     use tauri_plugin_shell::process::CommandEvent;
 
     let mut cmd = app.shell().sidecar("fnm").map_err(|e| e.to_string())?;
-    cmd = cmd.args(["--fnm-dir", fnm_dir]).args(args);
+    cmd = cmd.args(["--fnm-dir", fnm_dir, "--node-dist-mirror", NODE_DIST_MIRROR]).args(args);
     let (mut rx, child) = cmd.spawn().map_err(|e| e.to_string())?;
 
     loop {
@@ -546,7 +549,11 @@ async fn run_install_steps(
         }
         NodeStrategy::SystemFnm => {
             emit_log(app, "正在通过系统 fnm 安装 Node.js 22 并设为默认版本...");
-            match run_login_shell_step(app, "fnm install 22 && fnm default 22", cancel_rx).await {
+            let fnm_cmd = format!(
+                "fnm --node-dist-mirror {} install 22 && fnm default 22",
+                NODE_DIST_MIRROR
+            );
+            match run_login_shell_step(app, &fnm_cmd, cancel_rx).await {
                 Ok(()) => emit_step(app, step1, "done"),
                 Err(e) => {
                     emit_log(app, &format!("⚠ 系统 fnm 安装失败（{}），自动切换到内置 fnm...", e));
