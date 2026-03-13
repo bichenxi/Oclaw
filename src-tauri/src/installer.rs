@@ -122,12 +122,25 @@ fn detect_system_fnm() -> bool {
 }
 
 /// 综合检测，返回最合适的安装策略。
-/// 优先使用版本管理器（nvm/fnm），确保安装后能设为默认版本。
+///
+/// Unix: 优先版本管理器（nvm > fnm），确保安装后能设为默认版本。
+/// Windows: 优先已有 node（无权限问题），版本管理器次之。
 fn detect_node_strategy(home_dir: &std::path::Path) -> NodeStrategy {
     let _ = home_dir; // used only on Unix; suppress warning on Windows
-    // 1. 系统 nvm？
-    //    Unix: ~/.nvm/nvm.sh 存在
-    //    Windows: nvm-windows 在 %APPDATA%\nvm 或 PATH 中
+
+    // Windows: 先检查已有 node，避免 fnm/nvm 的权限问题
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(major) = detect_system_node_major() {
+            if major >= 22 {
+                return NodeStrategy::SystemNode(major);
+            }
+        }
+    }
+
+    // 系统 nvm？
+    //   Unix: ~/.nvm/nvm.sh 存在
+    //   Windows: nvm-windows（%APPDATA%\nvm\nvm.exe 或 PATH 中）
     #[cfg(not(target_os = "windows"))]
     let has_nvm = home_dir.join(".nvm").join("nvm.sh").exists();
     #[cfg(target_os = "windows")]
@@ -141,17 +154,18 @@ fn detect_node_strategy(home_dir: &std::path::Path) -> NodeStrategy {
     if has_nvm {
         return NodeStrategy::SystemNvm;
     }
-    // 2. 系统 fnm？
+    // 系统 fnm？
     if detect_system_fnm() {
         return NodeStrategy::SystemFnm;
     }
-    // 3. 无版本管理器，系统已有 node >= 22
+    // Unix: 系统已有 node >= 22（Windows 已在前面检测过）
+    #[cfg(not(target_os = "windows"))]
     if let Some(major) = detect_system_node_major() {
         if major >= 22 {
             return NodeStrategy::SystemNode(major);
         }
     }
-    // 4. 兜底：内置 fnm
+    // 兜底：内置 fnm
     NodeStrategy::BundledFnm
 }
 
@@ -522,6 +536,9 @@ async fn run_install_steps(
     let step1 = "install-node";
     emit_step(app, step1, "running");
 
+    // 版本管理器安装失败时自动回退到 BundledFnm
+    let mut use_bundled_fnm = false;
+
     match &strategy {
         NodeStrategy::SystemNode(v) => {
             emit_log(app, &format!("系统 Node.js v{} 满足要求（>= 22），跳过安装。", v));
@@ -531,7 +548,10 @@ async fn run_install_steps(
             emit_log(app, "正在通过系统 fnm 安装 Node.js 22 并设为默认版本...");
             match run_login_shell_step(app, "fnm install 22 && fnm default 22", cancel_rx).await {
                 Ok(()) => emit_step(app, step1, "done"),
-                Err(e) => { emit_step(app, step1, "error"); emit_error(app, step1, &e); return Err(e); }
+                Err(e) => {
+                    emit_log(app, &format!("⚠ 系统 fnm 安装失败（{}），自动切换到内置 fnm...", e));
+                    use_bundled_fnm = true;
+                }
             }
         }
         NodeStrategy::SystemNvm => {
@@ -542,15 +562,23 @@ async fn run_install_steps(
             let cmd = "nvm install 22 && nvm use 22".to_string();
             match run_login_shell_step(app, &cmd, cancel_rx).await {
                 Ok(()) => emit_step(app, step1, "done"),
-                Err(e) => { emit_step(app, step1, "error"); emit_error(app, step1, &e); return Err(e); }
+                Err(e) => {
+                    emit_log(app, &format!("⚠ 系统 nvm 安装失败（{}），自动切换到内置 fnm...", e));
+                    use_bundled_fnm = true;
+                }
             }
         }
         NodeStrategy::BundledFnm => {
-            emit_log(app, "正在通过内置 fnm 安装 Node.js 22（首次下载约需 1~2 分钟）...");
-            match run_step(app, fnm_dir, &["install", "22"], cancel_rx).await {
-                Ok(()) => emit_step(app, step1, "done"),
-                Err(e) => { emit_step(app, step1, "error"); emit_error(app, step1, &e); return Err(e); }
-            }
+            use_bundled_fnm = true;
+        }
+    }
+
+    if use_bundled_fnm {
+        emit_log(app, "正在通过内置 fnm 安装 Node.js 22（首次下载约需 1~2 分钟）...");
+        emit_log(app, &format!("内置 fnm 目录：{}", fnm_dir));
+        match run_step(app, fnm_dir, &["install", "22"], cancel_rx).await {
+            Ok(()) => emit_step(app, step1, "done"),
+            Err(e) => { emit_step(app, step1, "error"); emit_error(app, step1, &e); return Err(e); }
         }
     }
 
@@ -559,20 +587,23 @@ async fn run_install_steps(
     emit_step(app, step2, "running");
     emit_log(app, "正在通过 npm 全局安装 openclaw，请稍候...");
 
-    let install_result = match &strategy {
-        NodeStrategy::SystemNode(_) =>
-            run_login_shell_step(app, "npm install -g openclaw --no-update-notifier --no-fund", cancel_rx).await,
-        NodeStrategy::SystemFnm =>
-            run_login_shell_step(app, "fnm exec --using=22 -- npm install -g openclaw --no-update-notifier --no-fund", cancel_rx).await,
-        NodeStrategy::SystemNvm => {
-            #[cfg(not(target_os = "windows"))]
-            let cmd = format!("source '{}' && nvm exec 22 npm install -g openclaw --no-update-notifier --no-fund", nvm_sh.display());
-            #[cfg(target_os = "windows")]
-            let cmd = "npm install -g openclaw --no-update-notifier --no-fund".to_string();
-            run_login_shell_step(app, &cmd, cancel_rx).await
+    let install_result = if use_bundled_fnm {
+        run_step(app, fnm_dir, &["exec", "--using=22", "--", "npm", "install", "-g", "openclaw", "--no-update-notifier", "--no-fund"], cancel_rx).await
+    } else {
+        match &strategy {
+            NodeStrategy::SystemNode(_) =>
+                run_login_shell_step(app, "npm install -g openclaw --no-update-notifier --no-fund", cancel_rx).await,
+            NodeStrategy::SystemFnm =>
+                run_login_shell_step(app, "fnm exec --using=22 -- npm install -g openclaw --no-update-notifier --no-fund", cancel_rx).await,
+            NodeStrategy::SystemNvm => {
+                #[cfg(not(target_os = "windows"))]
+                let cmd = format!("source '{}' && nvm exec 22 npm install -g openclaw --no-update-notifier --no-fund", nvm_sh.display());
+                #[cfg(target_os = "windows")]
+                let cmd = "npm install -g openclaw --no-update-notifier --no-fund".to_string();
+                run_login_shell_step(app, &cmd, cancel_rx).await
+            }
+            NodeStrategy::BundledFnm => unreachable!(),
         }
-        NodeStrategy::BundledFnm =>
-            run_step(app, fnm_dir, &["exec", "--using=22", "--", "npm", "install", "-g", "openclaw", "--no-update-notifier", "--no-fund"], cancel_rx).await,
     };
 
     match install_result {
@@ -591,18 +622,20 @@ async fn run_install_steps(
     }
 
     // ── 安装后处理：确保 openclaw 在终端 PATH 中 ─────────────────────────────
-    match &strategy {
-        NodeStrategy::SystemNode(_) => {
-            try_symlink_from_which(app, "which openclaw", &home_dir);
-        }
-        NodeStrategy::SystemFnm => {
-            try_symlink_from_which(app, "fnm exec --using=22 -- which openclaw", &home_dir);
-        }
-        NodeStrategy::SystemNvm => {
-            emit_log(app, "nvm 已将 Node.js 22 设为默认版本，新终端中 node/npm/openclaw 均可直接使用。");
-        }
-        NodeStrategy::BundledFnm => {
-            try_symlink_bundled_fnm(app, fnm_dir, &home_dir);
+    if use_bundled_fnm {
+        try_symlink_bundled_fnm(app, fnm_dir, &home_dir);
+    } else {
+        match &strategy {
+            NodeStrategy::SystemNode(_) => {
+                try_symlink_from_which(app, "which openclaw", &home_dir);
+            }
+            NodeStrategy::SystemFnm => {
+                try_symlink_from_which(app, "fnm exec --using=22 -- which openclaw", &home_dir);
+            }
+            NodeStrategy::SystemNvm => {
+                emit_log(app, "nvm 已将 Node.js 22 设为默认版本，新终端中 node/npm/openclaw 均可直接使用。");
+            }
+            NodeStrategy::BundledFnm => unreachable!(),
         }
     }
 
