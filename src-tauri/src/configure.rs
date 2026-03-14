@@ -335,7 +335,9 @@ struct WizardInner {
     #[cfg(not(target_os = "windows"))]
     child: Box<dyn portable_pty::Child + Send + Sync>,
     #[cfg(target_os = "windows")]
-    proc: conpty::Process,
+    kill_tx: std::sync::mpsc::Sender<()>,
+    #[cfg(target_os = "windows")]
+    exit_rx: Option<std::sync::mpsc::Receiver<i32>>,
 }
 
 impl WizardInner {
@@ -343,14 +345,14 @@ impl WizardInner {
         #[cfg(not(target_os = "windows"))]
         { let _ = self.child.kill(); }
         #[cfg(target_os = "windows")]
-        { let _ = self.proc.exit(1); }
+        { let _ = self.kill_tx.send(()); }
     }
 
     fn wait_exit_code(&mut self) -> i32 {
         #[cfg(not(target_os = "windows"))]
         { self.child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1) }
         #[cfg(target_os = "windows")]
-        { self.proc.wait(None).map(|code| code as i32).unwrap_or(-1) }
+        { self.exit_rx.take().and_then(|rx| rx.recv().ok()).unwrap_or(-1) }
     }
 }
 
@@ -358,6 +360,73 @@ impl Default for OnboardWizardState {
     fn default() -> Self {
         Self { inner: Arc::new(Mutex::new(None)) }
     }
+}
+
+// ─── Windows: 通道包装，将 winpty-rs PTY 适配成 Read/Write trait ──────────────
+
+#[cfg(target_os = "windows")]
+struct ChannelReader {
+    rx: std::sync::mpsc::Receiver<Vec<u8>>,
+    buf: Vec<u8>,
+}
+
+#[cfg(target_os = "windows")]
+impl std::io::Read for ChannelReader {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if !self.buf.is_empty() {
+            let n = self.buf.len().min(out.len());
+            out[..n].copy_from_slice(&self.buf[..n]);
+            self.buf.drain(..n);
+            return Ok(n);
+        }
+        match self.rx.recv() {
+            Ok(data) => {
+                let n = data.len().min(out.len());
+                out[..n].copy_from_slice(&data[..n]);
+                if data.len() > n {
+                    self.buf.extend_from_slice(&data[n..]);
+                }
+                Ok(n)
+            }
+            Err(_) => Ok(0),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct ChannelWriter {
+    tx: std::sync::mpsc::Sender<Vec<u8>>,
+}
+
+#[cfg(target_os = "windows")]
+impl std::io::Write for ChannelWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.tx.send(buf.to_vec())
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "PTY channel closed"))?;
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+}
+
+/// Windows: 构建 null 分隔的 Unicode 环境块（用于 CreateProcessW）。
+#[cfg(target_os = "windows")]
+fn build_env_block(full_path: &str) -> std::ffi::OsString {
+    let mut block = String::new();
+    for (key, value) in std::env::vars() {
+        if key.eq_ignore_ascii_case("PATH") { continue; }
+        block.push_str(&key);
+        block.push('=');
+        block.push_str(&value);
+        block.push('\0');
+    }
+    block.push_str("PATH=");
+    block.push_str(full_path);
+    block.push('\0');
+    block.push_str("TERM=xterm-256color\0");
+    block.push_str("TERM_PROGRAM=vscode\0");
+    block.push_str("FORCE_COLOR=1\0");
+    block.push('\0');
+    std::ffi::OsString::from(block)
 }
 
 /// 返回补充 PATH 用的目录列表（跨平台版本）。
@@ -561,61 +630,137 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
         format!("{}{}{}", extra_str, if cfg!(windows) { ";" } else { ":" }, current_path)
     };
 
-    // ── Windows: conpty ──────────────────────────────────────────────────
+    // ── Windows: winpty-rs（ConPTY → WinPTY 自动降级）────────────────────
     #[cfg(target_os = "windows")]
     let (reader, inner): (Box<dyn Read + Send>, WizardInner) = {
+        use winptyrs::{PTY, PTYArgs, PTYBackend};
+        use std::ffi::OsString;
+
         let found = find_node_and_openclaw_entry(&extra);
-        if found.is_none() {
-            let _ = app.emit("wizard:raw-data", "[wizard] ⚠ 未能定位 node 或 openclaw JS 入口，将尝试通过 cmd 启动...");
-        }
-        let mut cmd = if let Some((ref node_exe, ref entry_js)) = found {
+        let (appname, cmdline, cwd) = if let Some((ref node_exe, ref entry_js)) = found {
             eprintln!("[wizard] 发现 openclaw 入口：{} {}", node_exe, entry_js);
-            let mut c = std::process::Command::new(node_exe);
-            c.args([entry_js.as_str(), "onboard"]);
-            // 让 node 进程知道自己在 TTY 中，强制 enquirer 等开启交互模式
-            c.env("TERM", "xterm-256color");
-            c.env("TERM_PROGRAM", "vscode");
-            c.env("FORCE_COLOR", "1");
-            if let Some(parent) = std::path::Path::new(node_exe).parent() {
-                c.current_dir(parent);
-            }
-            c
+            let _ = app.emit("wizard:raw-data", format!("[wizard] node={}, entry={}", node_exe, entry_js));
+            let cmdline = format!("\"{}\" \"{}\" onboard", node_exe, entry_js);
+            let cwd = std::path::Path::new(node_exe).parent()
+                .map(|p| OsString::from(p.to_string_lossy().to_string()));
+            (OsString::from(node_exe), Some(OsString::from(cmdline)), cwd)
         } else {
-            eprintln!("[wizard] 未在常规路径发现 node/openclaw，回退到 cmd /C openclaw onboard");
-            let mut c = std::process::Command::new("cmd");
-            c.args(["/C", "openclaw", "onboard"]);
-            c.env("TERM", "xterm-256color");
-            c.env("TERM_PROGRAM", "vscode");
-            c.env("FORCE_COLOR", "1");
-            c
+            eprintln!("[wizard] 回退到 cmd /C openclaw onboard");
+            let _ = app.emit("wizard:raw-data", "[wizard] 未找到 node+openclaw 入口，回退到 cmd".to_string());
+            let sys = std::env::var("SYSTEMROOT").unwrap_or_else(|_| r"C:\Windows".to_string());
+            let cmd_exe = format!(r"{}\system32\cmd.exe", sys);
+            let cmdline = format!("\"{}\" /C openclaw onboard", cmd_exe);
+            (OsString::from(&cmd_exe), Some(OsString::from(cmdline)), None)
         };
 
-        // conpty 的环境块不做去重，必须手动剔除重复的 PATH（Windows 的 Path 大小写不一）
-        for (key, value) in std::env::vars_os() {
-            let k = key.to_string_lossy().to_uppercase();
-            if k == "PATH" { continue; }
-            cmd.env(&key, &value);
+        let env_block = build_env_block(&full_path);
+
+        // 尝试 ConPTY → WinPTY 自动降级
+        let backends = [
+            (PTYBackend::ConPTY, "ConPTY"),
+            (PTYBackend::WinPTY, "WinPTY"),
+        ];
+        let mut pty: Option<PTY> = None;
+        let mut used_backend = "";
+
+        for (backend, name) in &backends {
+            let mut args = PTYArgs::default();
+            args.cols = 80;
+            args.rows = 25;
+            match PTY::new_with_backend(&args, *backend) {
+                Ok(mut p) => {
+                    match p.spawn(
+                        appname.clone(),
+                        cmdline.clone(),
+                        cwd.clone(),
+                        Some(env_block.clone()),
+                    ) {
+                        Ok(_) => {
+                            eprintln!("[wizard] {} 启动成功", name);
+                            let _ = app.emit("wizard:raw-data", format!("[wizard] 后端：{} ✓", name));
+                            pty = Some(p);
+                            used_backend = name;
+                            break;
+                        }
+                        Err(e) => {
+                            eprintln!("[wizard] {} spawn 失败：{}", name, e.to_string_lossy());
+                            let _ = app.emit("wizard:raw-data", format!("[wizard] {} spawn 失败：{}", name, e.to_string_lossy()));
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[wizard] {} 初始化失败：{}", name, e.to_string_lossy());
+                    let _ = app.emit("wizard:raw-data", format!("[wizard] {} 不可用：{}", name, e.to_string_lossy()));
+                }
+            }
         }
-        cmd.env("PATH", &full_path);
-        eprintln!("[wizard] 增强 PATH 已就绪");
 
-        let mut opts = conpty::ProcessOptions::default();
-        opts.set_console_size(Some((80, 25)));
-        let mut proc = opts.spawn(cmd)
-            .map_err(|e| {
-                eprintln!("[wizard] conpty spawn 失败：{}", e);
-                format!("启动 openclaw onboard 失败：{}", e)
-            })?;
-        eprintln!("[wizard] conpty 进程已启动, pid={}", proc.pid());
+        let pty = pty.ok_or_else(|| {
+            let msg = "ConPTY 和 WinPTY 均不可用，无法启动可视化配置";
+            let _ = app.emit("wizard:raw-data", format!("[wizard] ✗ {}", msg));
+            msg.to_string()
+        })?;
 
-        let reader: Box<dyn Read + Send> = Box::new(
-            proc.output().map_err(|e| format!("无法获取 PTY reader：{}", e))?
-        );
-        let writer: Box<dyn std::io::Write + Send> = Box::new(
-            proc.input().map_err(|e| format!("无法获取 PTY writer：{}", e))?
-        );
+        // 通道：PTY IO 线程 ↔ 外部
+        let (output_tx, output_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let (input_tx, input_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let (kill_tx, kill_rx) = std::sync::mpsc::channel::<()>();
+        let (exit_tx, exit_rx) = std::sync::mpsc::channel::<i32>();
 
-        (reader, WizardInner { writer, proc })
+        let backend_name = used_backend.to_string();
+        let app_for_io = app.clone();
+
+        // PTY IO 线程：持有 PTY 实例，轮询读/写
+        std::thread::spawn(move || {
+            let mut pty = pty;
+            let mut first_data = true;
+            loop {
+                if kill_rx.try_recv().is_ok() {
+                    eprintln!("[wizard-io] 收到 kill 信号");
+                    break;
+                }
+                while let Ok(data) = input_rx.try_recv() {
+                    let s = OsString::from(String::from_utf8_lossy(&data).to_string());
+                    let _ = pty.write(s);
+                }
+                match pty.read(false) {
+                    Ok(s) => {
+                        let text = s.to_string_lossy().to_string();
+                        if !text.is_empty() {
+                            if first_data {
+                                eprintln!("[wizard-io/{}] 首次收到 {} 字节", backend_name, text.len());
+                                let _ = app_for_io.emit("wizard:raw-data",
+                                    format!("[io/{}] 首次输出 {} 字节", backend_name, text.len()));
+                                first_data = false;
+                            }
+                            let _ = output_tx.send(text.into_bytes());
+                        }
+                    }
+                    Err(_) => break,
+                }
+                if !pty.is_alive() {
+                    eprintln!("[wizard-io] 进程已退出");
+                    // 读取残留输出
+                    for _ in 0..10 {
+                        if let Ok(s) = pty.read(false) {
+                            let t = s.to_string_lossy().to_string();
+                            if !t.is_empty() { let _ = output_tx.send(t.into_bytes()); }
+                            else { break; }
+                        } else { break; }
+                    }
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(15));
+            }
+            let code = pty.get_exitstatus().map(|c| c as i32).unwrap_or(-1);
+            eprintln!("[wizard-io] 退出码={}", code);
+            let _ = exit_tx.send(code);
+        });
+
+        let reader: Box<dyn Read + Send> = Box::new(ChannelReader { rx: output_rx, buf: Vec::new() });
+        let writer: Box<dyn std::io::Write + Send> = Box::new(ChannelWriter { tx: input_tx });
+
+        (reader, WizardInner { writer, kill_tx, exit_rx: Some(exit_rx) })
     };
 
     // ── macOS/Linux: portable-pty ────────────────────────────────────────
@@ -653,6 +798,7 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
         *g = Some(inner);
     }
 
+    let app_for_reader = app.clone();
     let app_emit = app.clone();
     let state_for_thread = state_inner.clone();
 
@@ -673,7 +819,7 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
                         eprintln!("[wizard-reader] 首次收到 {} 字节数据", n);
                     }
                     // 推送原始原始数据日志供前端调试，解决“一直等待输出”却不知道后端有没有收到的问题
-                    let _ = app_emit.emit("wizard:raw-data", format!("[reader] 收到 {} 字节, 总计 {}", n, total_bytes));
+                    let _ = app_for_reader.emit("wizard:raw-data", format!("[reader] 收到 {} 字节, 总计 {}", n, total_bytes));
                     let _ = tx.send(buf[..n].to_vec());
                 }
                 Err(e) => {

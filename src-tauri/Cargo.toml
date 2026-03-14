@@ -1,6 +1,6 @@
 [package]
 name = "claw-browser"
-version = "1.2.29"
+version = "1.2.30"
 description = "Oclaw - Tauri backend (browser for OpenClaw)"
 authors = ["you"]
 edition = "2021"
@@ -34,4 +34,4 @@ pty-process = { version = "0.5", features = ["async"] }
 portable-pty = "0.8"
 
 [target.'cfg(windows)'.dependencies]
-conpty = "0.7"
+winpty-rs = "1.0"

@@ -16,8 +16,6 @@ import { useInstallerStore } from '@/stores/installer'
 import { useAutoSetup } from '@/composables/useAutoSetup'
 import { listen } from '@tauri-apps/api/event'
 
-const isWindows = /windows/i.test(navigator.userAgent)
-
 const store = useOnboardStore()
 const tabsStore = useTabsStore()
 const installerStore = useInstallerStore()
@@ -117,7 +115,7 @@ const showChinese = ref(true)
 /** 是否展开 TUI 调试面板 */
 const showRaw = ref(false)
 /** 调试面板当前 Tab：screen=终端全文，parsed=解析结果 */
-const rawTab = ref<'screen' | 'parsed'>('screen')
+const rawTab = ref<'screen' | 'parsed' | 'logs'>('screen')
 /** 完整的终端屏幕文本（后端每次解析都推送） */
 const screenText = ref('')
 const screenCursorRow = ref(0)
@@ -307,19 +305,7 @@ async function handleStart() {
     await startOnboardWizard()
     store.wizardRunning = true
   } catch (e: unknown) {
-    if (isWindows) {
-      formMode.value = true
-      formStep.value = 'auth_choice'
-      formAuthChoice.value = ''
-      formApiKey.value = ''
-      formBaseUrl.value = ''
-      formModelId.value = ''
-      formLogs.value = []
-      formRunning.value = false
-      store.wizardRunning = true
-    } else {
-      store.wizardError = (e as Error)?.message ?? String(e)
-    }
+    store.wizardError = (e as Error)?.message ?? String(e)
   } finally {
     starting.value = false
   }
