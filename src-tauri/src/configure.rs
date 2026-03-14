@@ -9,6 +9,7 @@
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
+#[cfg(not(target_os = "windows"))]
 use crate::installer::detect_login_shell;
 
 // ─── Onboard（非交互式）────────────────────────────────────────────────────
@@ -491,7 +492,7 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
         // DLL 初始化问题 (0xC0000142)。找不到时回退到 cmd /C。
         if let Some((node_exe, entry_js)) = find_node_and_openclaw_entry(&extra) {
             let mut c = CommandBuilder::new(&node_exe);
-            c.args([&entry_js, "onboard".to_string()]);
+            c.args([entry_js.as_str(), "onboard"]);
             if let Some(parent) = std::path::Path::new(&node_exe).parent() {
                 c.cwd(parent);
             }
