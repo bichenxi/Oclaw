@@ -233,14 +233,124 @@ fn find_git_cmd_dir() -> Option<String> {
         }
     }
 
+    // Oclaw 下载的便携版 MinGit
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let mingit_cmd = std::path::Path::new(&appdata)
+            .join("com.claw.browser").join("mingit").join("cmd");
+        if mingit_cmd.join("git.exe").exists() {
+            return Some(mingit_cmd.to_string_lossy().to_string());
+        }
+    }
+    if let Ok(local_ad) = std::env::var("LOCALAPPDATA") {
+        let mingit_cmd = std::path::Path::new(&local_ad)
+            .join("com.claw.browser").join("mingit").join("cmd");
+        if mingit_cmd.join("git.exe").exists() {
+            return Some(mingit_cmd.to_string_lossy().to_string());
+        }
+    }
+
     None
 }
 
-/// Windows: 检测 Git 是否可用，如果不可用则尝试通过 winget 自动安装。
-/// 返回 true 表示 git 已可用（原有或刚安装成功）。
+/// Windows: 下载便携版 MinGit 到应用数据目录，无需管理员权限。
+/// 成功返回 MinGit 的 cmd 目录路径。
+#[cfg(target_os = "windows")]
+fn download_portable_git(app: &AppHandle) -> Option<String> {
+    let app_data = app.path().app_data_dir().ok()?;
+    let mingit_dir = app_data.join("mingit");
+    let git_cmd_dir = mingit_dir.join("cmd");
+
+    if git_cmd_dir.join("git.exe").exists() {
+        return Some(git_cmd_dir.to_string_lossy().to_string());
+    }
+
+    emit_log(app, "正在下载便携版 Git（MinGit，约 35MB，无需管理员权限）...");
+
+    let zip_path = app_data.join("mingit.zip");
+    let _ = std::fs::create_dir_all(&app_data);
+
+    const MINGIT_VER: &str = "2.49.0";
+    const MINGIT_PATCH: &str = "2.49.0.windows.1";
+    let urls = [
+        format!(
+            "https://registry.npmmirror.com/-/binary/git-for-windows/v{}/MinGit-{}-64-bit.zip",
+            MINGIT_PATCH, MINGIT_VER
+        ),
+        format!(
+            "https://github.com/git-for-windows/git/releases/download/v{}/MinGit-{}-64-bit.zip",
+            MINGIT_PATCH, MINGIT_VER
+        ),
+    ];
+
+    let mut downloaded = false;
+    for url in &urls {
+        emit_log(app, &format!("  下载源：{}...", if url.contains("npmmirror") { "npmmirror（镜像）" } else { "GitHub" }));
+
+        let ok = std::process::Command::new("curl.exe")
+            .args(["-L", "--fail", "--silent", "--show-error",
+                   "--connect-timeout", "15", "--max-time", "300",
+                   "-o", &zip_path.to_string_lossy().to_string(), url.as_str()])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok && zip_path.exists() && std::fs::metadata(&zip_path).map(|m| m.len() > 1_000_000).unwrap_or(false) {
+            downloaded = true;
+            break;
+        }
+        let _ = std::fs::remove_file(&zip_path);
+
+        let ps_cmd = format!(
+            "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;\
+             Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing",
+            url, zip_path.to_string_lossy()
+        );
+        let ok = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &ps_cmd])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok && zip_path.exists() && std::fs::metadata(&zip_path).map(|m| m.len() > 1_000_000).unwrap_or(false) {
+            downloaded = true;
+            break;
+        }
+        let _ = std::fs::remove_file(&zip_path);
+    }
+
+    if !downloaded {
+        emit_log(app, "下载失败，请检查网络连接。");
+        return None;
+    }
+
+    emit_log(app, "下载完成，正在解压...");
+    let _ = std::fs::create_dir_all(&mingit_dir);
+    let extract_ok = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &format!(
+            "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
+            zip_path.to_string_lossy(), mingit_dir.to_string_lossy()
+        )])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    let _ = std::fs::remove_file(&zip_path);
+
+    if extract_ok && git_cmd_dir.join("git.exe").exists() {
+        emit_log(app, "✓ 便携版 Git 安装成功！");
+        Some(git_cmd_dir.to_string_lossy().to_string())
+    } else {
+        emit_log(app, "解压失败。");
+        let _ = std::fs::remove_dir_all(&mingit_dir);
+        None
+    }
+}
+
+/// Windows: 检测 Git 是否可用，不可用时依次尝试：
+/// 1. winget 安装（需要管理员权限）
+/// 2. 下载便携版 MinGit（无需管理员权限）
+/// 3. 提示手动安装
+/// 返回 true 表示 git 已可用。
 #[cfg(target_os = "windows")]
 fn ensure_git_available(app: &AppHandle) -> bool {
-    // 先检查 PATH 和常见位置
     let has_git = std::process::Command::new("git")
         .arg("--version")
         .stdout(std::process::Stdio::null())
@@ -252,44 +362,54 @@ fn ensure_git_available(app: &AppHandle) -> bool {
         return true;
     }
 
+    // 检查是否已有下载好的 MinGit
+    if let Ok(app_data) = app.path().app_data_dir() {
+        let mingit_cmd = app_data.join("mingit").join("cmd");
+        if mingit_cmd.join("git.exe").exists() {
+            let current = std::env::var("PATH").unwrap_or_default();
+            unsafe { std::env::set_var("PATH", format!("{};{}", mingit_cmd.to_string_lossy(), current)); }
+            return true;
+        }
+    }
+
     emit_log(app, "");
     emit_log(app, "⚠ 未检测到 Git，openclaw 的部分依赖需要 git 来安装。");
-    emit_log(app, "正在尝试通过 winget 自动安装 Git for Windows...");
 
-    let winget_result = std::process::Command::new("winget")
+    // 策略 1: winget
+    emit_log(app, "尝试方式一：winget 安装...");
+    let winget_ok = std::process::Command::new("winget")
         .args(["install", "-e", "--id", "Git.Git", "--silent",
                "--accept-package-agreements", "--accept-source-agreements"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .status();
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
 
-    match winget_result {
-        Ok(s) if s.success() => {
-            emit_log(app, "✓ Git for Windows 安装成功！");
-            // winget 安装后 git 应出现在 Program Files\Git\cmd
-            if find_git_cmd_dir().is_some() {
-                return true;
-            }
-            // 安装成功但路径未刷新，仍然可以通过 augmented_path_with_git 注入
-            let pf = std::env::var("PROGRAMFILES")
-                .unwrap_or_else(|_| r"C:\Program Files".to_string());
-            let default_git_cmd = format!(r"{}\Git\cmd", pf);
-            if std::path::Path::new(&default_git_cmd).join("git.exe").exists() {
-                return true;
-            }
-            emit_log(app, "Git 已安装但路径未刷新，将在后续步骤注入 PATH。");
-            true
-        }
-        _ => {
-            emit_log(app, "winget 自动安装失败（可能系统无 winget 或需要管理员权限）。");
-            emit_log(app, "");
-            emit_log(app, "请手动安装 Git for Windows：");
-            emit_log(app, "  下载地址：https://git-scm.com/download/win");
-            emit_log(app, "  安装时请勾选 \"Add to PATH\"");
-            emit_log(app, "  安装完成后重新点击安装按钮即可。");
-            false
-        }
+    if winget_ok {
+        emit_log(app, "✓ Git for Windows 安装成功！");
+        if find_git_cmd_dir().is_some() { return true; }
+        let pf = std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".to_string());
+        if std::path::Path::new(&format!(r"{}\Git\cmd\git.exe", pf)).exists() { return true; }
+    } else {
+        emit_log(app, "winget 不可用或需要管理员权限，跳过。");
     }
+
+    // 策略 2: 下载便携版 MinGit
+    emit_log(app, "尝试方式二：下载便携版 MinGit（无需管理员权限）...");
+    if let Some(git_dir) = download_portable_git(app) {
+        let current = std::env::var("PATH").unwrap_or_default();
+        unsafe { std::env::set_var("PATH", format!("{};{}", git_dir, current)); }
+        return true;
+    }
+
+    // 策略 3: 手动安装指引
+    emit_log(app, "");
+    emit_log(app, "自动安装均失败，请手动安装 Git for Windows：");
+    emit_log(app, "  下载地址：https://git-scm.com/download/win");
+    emit_log(app, "  安装时请勾选 \"Add to PATH\"");
+    emit_log(app, "  安装完成后重新点击安装按钮即可。");
+    false
 }
 
 // ─── 命令执行（流式输出）─────────────────────────────────────────────────────
