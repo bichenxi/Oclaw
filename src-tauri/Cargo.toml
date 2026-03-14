@@ -34,4 +34,4 @@ pty-process = { version = "0.5", features = ["async"] }
 portable-pty = "0.8"
 
 [target.'cfg(windows)'.dependencies]
-winpty-rs = "1.0"
+conpty = "0.7"
