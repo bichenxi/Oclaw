@@ -332,7 +332,26 @@ pub struct OnboardWizardState {
 
 struct WizardInner {
     writer: Box<dyn std::io::Write + Send>,
+    #[cfg(not(target_os = "windows"))]
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    #[cfg(target_os = "windows")]
+    proc: conpty::Process,
+}
+
+impl WizardInner {
+    fn kill(&mut self) {
+        #[cfg(not(target_os = "windows"))]
+        { let _ = self.child.kill(); }
+        #[cfg(target_os = "windows")]
+        { let _ = self.proc.exit(1); }
+    }
+
+    fn wait_exit_code(&mut self) -> i32 {
+        #[cfg(not(target_os = "windows"))]
+        { self.child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1) }
+        #[cfg(target_os = "windows")]
+        { self.proc.wait(None).map(|code| code as i32).unwrap_or(-1) }
+    }
 }
 
 impl Default for OnboardWizardState {
@@ -454,11 +473,13 @@ fn find_node_and_openclaw_entry(extra_dirs: &[String]) -> Option<(String, String
     None
 }
 
-/// 启动卡片向导：用 portable-pty 跨平台 PTY 运行 openclaw onboard，
+/// 启动卡片向导：用跨平台 PTY 运行 openclaw onboard，
 /// 通过 vt100 解析屏幕，将 prompt 以结构化事件推送给前端。
+///
+/// - macOS/Linux：使用 portable-pty（Unix PTY）
+/// - Windows：使用 conpty crate（ConPTY，正确处理 std handles 避免 0xC0000142）
 #[tauri::command]
 pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
-    use portable_pty::{CommandBuilder, PtySize};
     use std::io::Read;
 
     let state = app.try_state::<OnboardWizardState>().ok_or("OnboardWizardState not found")?;
@@ -478,62 +499,79 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
         format!("{}{}{}", extra_str, if cfg!(windows) { ";" } else { ":" }, current_path)
     };
 
-    let pty_system = portable_pty::native_pty_system();
-    let pair = pty_system.openpty(PtySize {
-        rows: 30,
-        cols: 120,
-        pixel_width: 0,
-        pixel_height: 0,
-    }).map_err(|e| format!("PTY 分配失败：{}", e))?;
-
+    // ── Windows: conpty ──────────────────────────────────────────────────
     #[cfg(target_os = "windows")]
-    let mut cmd = {
-        // 优先直接运行 node.exe + openclaw JS 入口，避免 cmd.exe 在 ConPTY 中的
-        // DLL 初始化问题 (0xC0000142)。找不到时回退到 cmd /C。
-        if let Some((node_exe, entry_js)) = find_node_and_openclaw_entry(&extra) {
-            let mut c = CommandBuilder::new(&node_exe);
-            c.args([entry_js.as_str(), "onboard"]);
+    let (reader, inner): (Box<dyn Read + Send>, WizardInner) = {
+        let mut cmd = if let Some((node_exe, entry_js)) = find_node_and_openclaw_entry(&extra) {
+            let mut c = std::process::Command::new(&node_exe);
+            c.args([&entry_js, "onboard"]);
             if let Some(parent) = std::path::Path::new(&node_exe).parent() {
-                c.cwd(parent);
+                c.current_dir(parent);
             }
             c
         } else {
-            let mut c = CommandBuilder::new("cmd");
+            let mut c = std::process::Command::new("cmd");
             c.args(["/C", "openclaw onboard"]);
             c
-        }
+        };
+        cmd.env("PATH", &full_path);
+
+        let mut opts = conpty::ProcessOptions::default();
+        opts.set_console_size(Some((120, 30)));
+        let mut proc = opts.spawn(cmd)
+            .map_err(|e| format!("启动 openclaw onboard 失败：{}", e))?;
+
+        let reader: Box<dyn Read + Send> = Box::new(
+            proc.output().map_err(|e| format!("无法获取 PTY reader：{}", e))?
+        );
+        let writer: Box<dyn std::io::Write + Send> = Box::new(
+            proc.input().map_err(|e| format!("无法获取 PTY writer：{}", e))?
+        );
+
+        (reader, WizardInner { writer, proc })
     };
+
+    // ── macOS/Linux: portable-pty ────────────────────────────────────────
     #[cfg(not(target_os = "windows"))]
-    let mut cmd = {
+    let (reader, inner): (Box<dyn Read + Send>, WizardInner) = {
+        use portable_pty::{CommandBuilder, PtySize};
+
+        let pty_system = portable_pty::native_pty_system();
+        let pair = pty_system.openpty(PtySize {
+            rows: 30, cols: 120, pixel_width: 0, pixel_height: 0,
+        }).map_err(|e| format!("PTY 分配失败：{}", e))?;
+
         let shell = detect_login_shell();
         let cmd_str = format!("export PATH=\"{}:$PATH\"; openclaw onboard", extra_str);
-        let mut c = CommandBuilder::new(&shell);
-        c.args(["-l", "-i", "-c", &cmd_str]);
-        c
+        let mut cmd = CommandBuilder::new(&shell);
+        cmd.args(["-l", "-i", "-c", &cmd_str]);
+        cmd.env("PATH", &full_path);
+
+        let child = pair.slave.spawn_command(cmd)
+            .map_err(|e| format!("启动 openclaw onboard 失败：{}", e))?;
+        drop(pair.slave);
+
+        let reader: Box<dyn Read + Send> = pair.master.try_clone_reader()
+            .map_err(|e| format!("无法获取 PTY reader：{}", e))?;
+        let writer = pair.master.take_writer()
+            .map_err(|e| format!("无法获取 PTY writer：{}", e))?;
+
+        (reader, WizardInner { writer, child })
     };
-    cmd.env("PATH", &full_path);
 
-    let child = pair.slave.spawn_command(cmd)
-        .map_err(|e| format!("启动 openclaw onboard 失败：{}", e))?;
-    drop(pair.slave);
-
-    let mut reader = pair.master.try_clone_reader()
-        .map_err(|e| format!("无法获取 PTY reader：{}", e))?;
-    let writer = pair.master.take_writer()
-        .map_err(|e| format!("无法获取 PTY writer：{}", e))?;
-
+    // ── 公共：存储状态 + 启动读取/解析线程 ──────────────────────────────
     let state_inner = state.inner.clone();
     {
         let mut g = state_inner.lock().unwrap();
-        *g = Some(WizardInner { writer, child });
+        *g = Some(inner);
     }
 
     let app_emit = app.clone();
     let state_for_thread = state_inner.clone();
 
-    // 读取线程：通过 channel 将 PTY 数据传出（避免阻塞 read 卡住解析逻辑）
     let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
     std::thread::spawn(move || {
+        let mut reader = reader;
         let mut buf = [0u8; 4096];
         loop {
             match reader.read(&mut buf) {
@@ -544,19 +582,16 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
         }
     });
 
-    // 解析线程：从 channel 收数据，debounce 后解析屏幕
     std::thread::spawn(move || {
         let mut parser = vt100::Parser::new(30, 120, 0);
         let mut last_prompt: Option<String> = None;
         let debounce = std::time::Duration::from_millis(150);
 
         loop {
-            // 阻塞等待第一块数据
             match rx.recv() {
                 Ok(data) => parser.process(&data),
-                Err(_) => break, // 发送端关闭，进程已退出
+                Err(_) => break,
             }
-            // 持续消耗后续数据直到 debounce 超时（TUI 渲染完毕）
             loop {
                 match rx.recv_timeout(debounce) {
                     Ok(data) => parser.process(&data),
@@ -588,13 +623,10 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
             }
         }
 
-        // 进程结束，获取退出码
         let code = {
             let mut g = state_for_thread.lock().unwrap();
             let code = if let Some(ref mut inner) = *g {
-                inner.child.wait()
-                    .map(|s| s.exit_code() as i32)
-                    .unwrap_or(-1)
+                inner.wait_exit_code()
             } else {
                 -1
             };
@@ -661,7 +693,7 @@ pub fn wizard_send_keys(state: tauri::State<'_, OnboardWizardState>, actions: Ve
 pub fn kill_onboard_wizard(state: tauri::State<'_, OnboardWizardState>) -> Result<(), String> {
     let mut g = state.inner.lock().unwrap();
     if let Some(mut inner) = g.take() {
-        let _ = inner.child.kill();
+        inner.kill();
     }
     Ok(())
 }

@@ -174,7 +174,7 @@ fn detect_node_strategy(home_dir: &std::path::Path) -> NodeStrategy {
 
 // ─── Windows 工具路径补全 ────────────────────────────────────────────────────
 
-/// Windows: 在 Program Files 等常见路径中查找 Git for Windows，
+/// Windows: 在常见路径中查找 Git for Windows，
 /// 返回 `Some(augmented_PATH)` 以便子进程能找到 `git.exe`。
 /// 如果 git 已在 PATH 中或未找到安装目录，返回 None。
 #[cfg(target_os = "windows")]
@@ -189,22 +189,107 @@ fn augmented_path_with_git() -> Option<String> {
     {
         return None;
     }
-    let current = std::env::var("PATH").unwrap_or_default();
+    if let Some(dir) = find_git_cmd_dir() {
+        let current = std::env::var("PATH").unwrap_or_default();
+        return Some(format!("{};{}", dir, current));
+    }
+    None
+}
+
+/// Windows: 搜索 Git for Windows 的 cmd 目录，覆盖主流安装方式。
+#[cfg(target_os = "windows")]
+fn find_git_cmd_dir() -> Option<String> {
     let pf = std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".to_string());
     let pf86 = std::env::var("PROGRAMFILES(X86)")
         .unwrap_or_else(|_| r"C:\Program Files (x86)".to_string());
-    let user = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let userprofile = std::env::var("USERPROFILE").unwrap_or_default();
+
     let candidates = [
         format!(r"{}\Git\cmd", pf),
         format!(r"{}\Git\cmd", pf86),
-        format!(r"{}\Programs\Git\cmd", user),
+        format!(r"{}\Programs\Git\cmd", local),
+        format!(r"{}\scoop\shims", userprofile),
+        format!(r"{}\scoop\apps\git\current\cmd", userprofile),
     ];
+
     for dir in &candidates {
         if std::path::Path::new(dir).join("git.exe").exists() {
-            return Some(format!("{};{}", dir, current));
+            return Some(dir.clone());
         }
     }
+
+    // GitHub Desktop 捆绑的 PortableGit
+    let gh_git_base = std::path::Path::new(&local).join("GitHub");
+    if let Ok(rd) = std::fs::read_dir(&gh_git_base) {
+        for e in rd.flatten() {
+            let name = e.file_name();
+            if name.to_string_lossy().starts_with("PortableGit") {
+                let cmd_dir = e.path().join("cmd");
+                if cmd_dir.join("git.exe").exists() {
+                    return Some(cmd_dir.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
     None
+}
+
+/// Windows: 检测 Git 是否可用，如果不可用则尝试通过 winget 自动安装。
+/// 返回 true 表示 git 已可用（原有或刚安装成功）。
+#[cfg(target_os = "windows")]
+fn ensure_git_available(app: &AppHandle) -> bool {
+    // 先检查 PATH 和常见位置
+    let has_git = std::process::Command::new("git")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if has_git || find_git_cmd_dir().is_some() {
+        return true;
+    }
+
+    emit_log(app, "");
+    emit_log(app, "⚠ 未检测到 Git，openclaw 的部分依赖需要 git 来安装。");
+    emit_log(app, "正在尝试通过 winget 自动安装 Git for Windows...");
+
+    let winget_result = std::process::Command::new("winget")
+        .args(["install", "-e", "--id", "Git.Git", "--silent",
+               "--accept-package-agreements", "--accept-source-agreements"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .status();
+
+    match winget_result {
+        Ok(s) if s.success() => {
+            emit_log(app, "✓ Git for Windows 安装成功！");
+            // winget 安装后 git 应出现在 Program Files\Git\cmd
+            if find_git_cmd_dir().is_some() {
+                return true;
+            }
+            // 安装成功但路径未刷新，仍然可以通过 augmented_path_with_git 注入
+            let pf = std::env::var("PROGRAMFILES")
+                .unwrap_or_else(|_| r"C:\Program Files".to_string());
+            let default_git_cmd = format!(r"{}\Git\cmd", pf);
+            if std::path::Path::new(&default_git_cmd).join("git.exe").exists() {
+                return true;
+            }
+            emit_log(app, "Git 已安装但路径未刷新，将在后续步骤注入 PATH。");
+            true
+        }
+        _ => {
+            emit_log(app, "winget 自动安装失败（可能系统无 winget 或需要管理员权限）。");
+            emit_log(app, "");
+            emit_log(app, "请手动安装 Git for Windows：");
+            emit_log(app, "  下载地址：https://git-scm.com/download/win");
+            emit_log(app, "  安装时请勾选 \"Add to PATH\"");
+            emit_log(app, "  安装完成后重新点击安装按钮即可。");
+            false
+        }
+    }
 }
 
 // ─── 命令执行（流式输出）─────────────────────────────────────────────────────
@@ -695,6 +780,17 @@ async fn run_install_steps(
         match run_step(app, fnm_dir, &["install", "22"], cancel_rx).await {
             Ok(()) => emit_step(app, step1, "done"),
             Err(e) => { emit_step(app, step1, "error"); emit_error(app, step1, &e); return Err(e); }
+        }
+    }
+
+    // ── 步骤 1.5（Windows）：确保 Git 可用 ─────────────────────────────────
+    #[cfg(target_os = "windows")]
+    {
+        if !ensure_git_available(app) {
+            let step_git = "ensure-git";
+            emit_step(app, step_git, "error");
+            emit_error(app, step_git, "缺少 Git，无法继续安装 openclaw");
+            return Err("缺少 Git，请安装 Git for Windows 后重试".to_string());
         }
     }
 

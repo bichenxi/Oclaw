@@ -298,25 +298,23 @@ async function handleStart() {
   store.wizardPrompt = null
   store.wizardHistory = []
 
-  if (isWindows) {
-    formMode.value = true
-    formStep.value = 'auth_choice'
-    formAuthChoice.value = ''
-    formApiKey.value = ''
-    formBaseUrl.value = ''
-    formModelId.value = ''
-    formLogs.value = []
-    formRunning.value = false
-    store.wizardRunning = true
-    starting.value = false
-    return
-  }
-
   try {
     await startOnboardWizard()
     store.wizardRunning = true
   } catch (e: unknown) {
-    store.wizardError = (e as Error)?.message ?? String(e)
+    if (isWindows) {
+      formMode.value = true
+      formStep.value = 'auth_choice'
+      formAuthChoice.value = ''
+      formApiKey.value = ''
+      formBaseUrl.value = ''
+      formModelId.value = ''
+      formLogs.value = []
+      formRunning.value = false
+      store.wizardRunning = true
+    } else {
+      store.wizardError = (e as Error)?.message ?? String(e)
+    }
   } finally {
     starting.value = false
   }
