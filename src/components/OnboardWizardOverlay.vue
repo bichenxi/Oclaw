@@ -255,6 +255,11 @@ function startListeners() {
     unlockSending()
   }).then((fn) => unlistens.value.push(fn))
 
+  listen<string>('wizard:raw-data', (e) => {
+    formLogs.value.push(e.payload)
+    if (formLogs.value.length > 100) formLogs.value.shift()
+  }).then((fn) => unlistens.value.push(fn))
+
   listen<{ text: string; cursor_row: number }>('wizard:screen', (e) => {
     screenText.value = e.payload.text
     screenCursorRow.value = e.payload.cursor_row
@@ -811,12 +816,26 @@ async function goToChat() {
                 >
                   解析结果
                 </button>
+                <button
+                  type="button"
+                  class="px-4 py-2 text-[12px] font-sans font-medium cursor-pointer transition border-none"
+                  :class="rawTab === 'logs' ? 'bg-[#2a2040] text-[#a78bfa]' : 'bg-transparent text-[#6b5f8a] hover:text-[#9b8ec4]'"
+                  @click="rawTab = 'logs'"
+                >
+                  诊断日志
+                </button>
               </div>
 
               <!-- 终端全文输出 -->
               <div v-if="rawTab === 'screen'" class="p-4 font-mono text-[12px] leading-[1.7] overflow-auto max-h-[400px]">
                 <div class="text-[11px] text-[#6b5f8a] mb-2 font-sans">cursor_row: {{ screenCursorRow }}</div>
                 <pre class="m-0 whitespace-pre text-green-400">{{ screenText || '（等待终端输出…）' }}</pre>
+              </div>
+
+              <!-- 诊断日志 -->
+              <div v-else-if="rawTab === 'logs'" class="p-4 font-mono text-[12px] leading-[1.7] overflow-auto max-h-[400px] text-[#9b8ec4]">
+                <div v-for="(log, i) in formLogs" :key="i" class="mb-1">{{ log }}</div>
+                <div v-if="!formLogs.length" class="text-[#6b5f8a]">（无诊断日志）</div>
               </div>
 
               <!-- 解析后的 prompt 数据 -->

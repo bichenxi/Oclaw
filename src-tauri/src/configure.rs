@@ -378,10 +378,20 @@ fn wizard_extra_path_dirs(app: &AppHandle) -> Vec<String> {
     }
     #[cfg(target_os = "windows")]
     {
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            dirs.push(format!("{}\\npm", appdata));
-            dirs.push(format!("{}\\nvm", appdata));
-        }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        dirs.push(format!("{}\\npm", appdata));
+        dirs.push(format!("{}\\nvm", appdata));
+    }
+    if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
+        dirs.push(format!("{}\\npm", localappdata));
+        dirs.push(format!("{}\\nvm", localappdata));
+        dirs.push(format!("{}\\Programs\\nodejs", localappdata));
+    }
+    if let Ok(userprofile) = std::env::var("USERPROFILE") {
+        dirs.push(format!("{}\\.npm-global", userprofile));
+        dirs.push(format!("{}\\.npm-global\\bin", userprofile));
+        dirs.push(format!("{}\\scoop\\shims", userprofile));
+    }
     }
 
     let openclaw_bin = if cfg!(windows) { "openclaw.cmd" } else { "openclaw" };
@@ -434,43 +444,95 @@ fn wizard_extra_path_dirs(app: &AppHandle) -> Vec<String> {
             }
         }
     }
+    
+    // 扫描系统常见 Node 安装目录
+    if cfg!(windows) {
+        if let Ok(pf) = std::env::var("PROGRAMFILES") {
+            dirs.push(format!("{}\\nodejs", pf));
+        }
+        if let Ok(pf86) = std::env::var("PROGRAMFILES(X86)") {
+            dirs.push(format!("{}\\nodejs", pf86));
+        }
+    }
+    
     dirs
 }
 
-/// Windows: 在 extra_dirs 和系统 PATH 中搜索 `node.exe` + `openclaw` npm 包，
+/// Windows: 在 extra_dirs 和系统 PATH 中独立搜索 `node.exe` 和 `openclaw` npm 包，
 /// 通过 package.json 的 `bin` 字段定位 JS 入口，返回 (node_exe, entry_js)。
-/// 直接运行 node.exe 可避免 cmd.exe 在 ConPTY 中的 DLL 初始化失败 (0xC0000142)。
+/// 这种分离搜索比原来“要求两者在同一目录”更符合 Windows 全局安装的实际情况。
 #[cfg(target_os = "windows")]
 fn find_node_and_openclaw_entry(extra_dirs: &[String]) -> Option<(String, String)> {
     let path_var = std::env::var("PATH").unwrap_or_default();
-    let all_dirs = extra_dirs.iter().map(|s| s.as_str())
-        .chain(path_var.split(';'));
+    let all_dirs: Vec<&str> = extra_dirs.iter().map(|s| s.as_str())
+        .chain(path_var.split(';'))
+        .filter(|s| !s.is_empty())
+        .collect();
 
-    for dir in all_dirs {
-        if dir.is_empty() { continue; }
-        let dp = std::path::Path::new(dir);
-        let node_exe = dp.join("node.exe");
-        let pkg_json = dp.join("node_modules").join("openclaw").join("package.json");
-        if !node_exe.exists() || !pkg_json.exists() { continue; }
-
-        let content = std::fs::read_to_string(&pkg_json).ok()?;
-        let json: serde_json::Value = serde_json::from_str(&content).ok()?;
-        let rel = match json.get("bin")? {
-            serde_json::Value::String(s) => s.clone(),
-            serde_json::Value::Object(m) => {
-                m.get("openclaw").and_then(|v| v.as_str()).map(String::from)?
-            }
-            _ => continue,
-        };
-        let entry = dp.join("node_modules").join("openclaw").join(&rel);
-        if entry.exists() {
-            return Some((
-                node_exe.to_string_lossy().to_string(),
-                entry.to_string_lossy().to_string(),
-            ));
+    let mut node_exe_path = None;
+    for &dir in &all_dirs {
+        let p = std::path::Path::new(dir).join("node.exe");
+        if p.exists() {
+            node_exe_path = Some(p.to_string_lossy().to_string());
+            break;
         }
     }
-    None
+    let node_exe = node_exe_path?;
+
+    let mut entry_js_path = None;
+    for &dir in &all_dirs {
+        let dp = std::path::Path::new(dir);
+        // 情况 A: 当前目录下就有 node_modules（如内置 fnm 或 npm 全局根目录）
+        let pkg_json = dp.join("node_modules").join("openclaw").join("package.json");
+        if pkg_json.exists() {
+            if let Some(entry) = resolve_entry_from_pkg_json(&pkg_json) {
+                entry_js_path = Some(entry);
+                break;
+            }
+        }
+        // 情况 B: 当前目录本身就是 node_modules/openclaw（某些特殊配置）
+        let pkg_json_self = dp.join("package.json");
+        if pkg_json_self.exists() {
+            if let Some(entry) = resolve_entry_from_pkg_json(&pkg_json_self) {
+                entry_js_path = Some(entry);
+                break;
+            }
+        }
+        // 情况 C: 在 npm 目录下查找 openclaw.cmd 并从中解析真正的 bin 路径
+        let cmd_file = dp.join("openclaw.cmd");
+        if cmd_file.exists() {
+            // 如果能直接运行 openclaw.cmd 其实也行，但 conpty+cmd 容易 0xC0000142，
+            // 还是尝试从它旁边找 node_modules
+            let node_modules_openclaw = dp.join("node_modules").join("openclaw").join("package.json");
+            if node_modules_openclaw.exists() {
+                if let Some(entry) = resolve_entry_from_pkg_json(&node_modules_openclaw) {
+                    entry_js_path = Some(entry);
+                    break;
+                }
+            }
+        }
+    }
+
+    entry_js_path.map(|js| (node_exe, js))
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_entry_from_pkg_json(pkg_json: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(pkg_json).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let rel = match json.get("bin")? {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Object(m) => {
+            m.get("openclaw").and_then(|v| v.as_str()).map(String::from)?
+        }
+        _ => return None,
+    };
+    let entry = pkg_json.parent()?.join(&rel);
+    if entry.exists() {
+        Some(entry.to_string_lossy().to_string())
+    } else {
+        None
+    }
 }
 
 /// 启动卡片向导：用跨平台 PTY 运行 openclaw onboard，
@@ -502,24 +564,49 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
     // ── Windows: conpty ──────────────────────────────────────────────────
     #[cfg(target_os = "windows")]
     let (reader, inner): (Box<dyn Read + Send>, WizardInner) = {
-        let mut cmd = if let Some((node_exe, entry_js)) = find_node_and_openclaw_entry(&extra) {
-            let mut c = std::process::Command::new(&node_exe);
-            c.args([&entry_js, "onboard"]);
-            if let Some(parent) = std::path::Path::new(&node_exe).parent() {
+        let found = find_node_and_openclaw_entry(&extra);
+        if found.is_none() {
+            let _ = app.emit("wizard:raw-data", "[wizard] ⚠ 未能定位 node 或 openclaw JS 入口，将尝试通过 cmd 启动...");
+        }
+        let mut cmd = if let Some((ref node_exe, ref entry_js)) = found {
+            eprintln!("[wizard] 发现 openclaw 入口：{} {}", node_exe, entry_js);
+            let mut c = std::process::Command::new(node_exe);
+            c.args([entry_js.as_str(), "onboard"]);
+            // 让 node 进程知道自己在 TTY 中，强制 enquirer 等开启交互模式
+            c.env("TERM", "xterm-256color");
+            c.env("TERM_PROGRAM", "vscode");
+            c.env("FORCE_COLOR", "1");
+            if let Some(parent) = std::path::Path::new(node_exe).parent() {
                 c.current_dir(parent);
             }
             c
         } else {
+            eprintln!("[wizard] 未在常规路径发现 node/openclaw，回退到 cmd /C openclaw onboard");
             let mut c = std::process::Command::new("cmd");
-            c.args(["/C", "openclaw onboard"]);
+            c.args(["/C", "openclaw", "onboard"]);
+            c.env("TERM", "xterm-256color");
+            c.env("TERM_PROGRAM", "vscode");
+            c.env("FORCE_COLOR", "1");
             c
         };
+
+        // conpty 的环境块不做去重，必须手动剔除重复的 PATH（Windows 的 Path 大小写不一）
+        for (key, value) in std::env::vars_os() {
+            let k = key.to_string_lossy().to_uppercase();
+            if k == "PATH" { continue; }
+            cmd.env(&key, &value);
+        }
         cmd.env("PATH", &full_path);
+        eprintln!("[wizard] 增强 PATH 已就绪");
 
         let mut opts = conpty::ProcessOptions::default();
-        opts.set_console_size(Some((120, 30)));
+        opts.set_console_size(Some((80, 25)));
         let mut proc = opts.spawn(cmd)
-            .map_err(|e| format!("启动 openclaw onboard 失败：{}", e))?;
+            .map_err(|e| {
+                eprintln!("[wizard] conpty spawn 失败：{}", e);
+                format!("启动 openclaw onboard 失败：{}", e)
+            })?;
+        eprintln!("[wizard] conpty 进程已启动, pid={}", proc.pid());
 
         let reader: Box<dyn Read + Send> = Box::new(
             proc.output().map_err(|e| format!("无法获取 PTY reader：{}", e))?
@@ -573,28 +660,49 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
     std::thread::spawn(move || {
         let mut reader = reader;
         let mut buf = [0u8; 4096];
+        let mut total_bytes = 0usize;
         loop {
             match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => { let _ = tx.send(buf[..n].to_vec()); }
-                Err(_) => break,
+                Ok(0) => {
+                    eprintln!("[wizard-reader] EOF, 共读取 {} 字节", total_bytes);
+                    break;
+                }
+                Ok(n) => {
+                    total_bytes += n;
+                    if total_bytes == n {
+                        eprintln!("[wizard-reader] 首次收到 {} 字节数据", n);
+                    }
+                    // 推送原始原始数据日志供前端调试，解决“一直等待输出”却不知道后端有没有收到的问题
+                    let _ = app_emit.emit("wizard:raw-data", format!("[reader] 收到 {} 字节, 总计 {}", n, total_bytes));
+                    let _ = tx.send(buf[..n].to_vec());
+                }
+                Err(e) => {
+                    eprintln!("[wizard-reader] 读取错误: {}, 已读 {} 字节", e, total_bytes);
+                    break;
+                }
             }
         }
     });
 
     std::thread::spawn(move || {
-        let mut parser = vt100::Parser::new(30, 120, 0);
+        let mut parser = vt100::Parser::new(25, 80, 0);
         let mut last_prompt: Option<String> = None;
         let debounce = std::time::Duration::from_millis(150);
 
         loop {
             match rx.recv() {
-                Ok(data) => parser.process(&data),
+                Ok(data) => {
+                    eprintln!("[wizard-parser] 收到数据，开始处理，长度={}", data.len());
+                    parser.process(&data);
+                },
                 Err(_) => break,
             }
             loop {
                 match rx.recv_timeout(debounce) {
-                    Ok(data) => parser.process(&data),
+                    Ok(data) => {
+                        eprintln!("[wizard-parser] 收到后续数据，长度={}", data.len());
+                        parser.process(&data);
+                    },
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 }
@@ -602,6 +710,7 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
             let screen = parser.screen();
             let screen_text = screen.contents();
             let cursor_row = screen.cursor_position().0;
+            eprintln!("[wizard-parser] 屏显文本长度={}, 游标行={}", screen_text.len(), cursor_row);
 
             #[derive(Clone, serde::Serialize)]
             struct WizardScreen { text: String, cursor_row: u16 }
