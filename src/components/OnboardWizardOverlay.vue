@@ -5,7 +5,9 @@ import {
   wizardSendKey,
   wizardSendKeys,
   killOnboardWizard,
+  runOnboard,
   type WizardPrompt,
+  type OnboardParams,
 } from '@/api/onboard'
 import { restartOpenclawGateway } from '@/api/gateway'
 import { checkOpenclawAlive } from '@/api/openclaw'
@@ -13,6 +15,8 @@ import { useTabsStore } from '@/stores/tabs'
 import { useInstallerStore } from '@/stores/installer'
 import { useAutoSetup } from '@/composables/useAutoSetup'
 import { listen } from '@tauri-apps/api/event'
+
+const isWindows = /windows/i.test(navigator.userAgent)
 
 const store = useOnboardStore()
 const tabsStore = useTabsStore()
@@ -27,6 +31,77 @@ let sendingTimer: ReturnType<typeof setTimeout> | null = null
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const autoConfiguring = ref(false)
+
+// ─── Windows 表单模式（不依赖 PTY）────────────────────────────────────────
+const formMode = ref(false)
+type FormStep = 'auth_choice' | 'api_key' | 'custom_base_url' | 'custom_model_id' | 'running'
+const formStep = ref<FormStep>('auth_choice')
+const formAuthChoice = ref('')
+const formApiKey = ref('')
+const formBaseUrl = ref('')
+const formModelId = ref('')
+const formLogs = ref<string[]>([])
+const formRunning = ref(false)
+
+const AUTH_OPTIONS = [
+  { value: 'anthropic-api-key', label: 'Anthropic API Key' },
+  { value: 'openai-api-key', label: 'OpenAI API Key' },
+  { value: 'custom-api-key', label: '自定义 API（兼容 OpenAI 格式）' },
+]
+
+function formSelectAuth(choice: string) {
+  formAuthChoice.value = choice
+  store.wizardHistory.push({ question: '模型 / 认证提供商', answer: AUTH_OPTIONS.find(o => o.value === choice)?.label ?? choice })
+  formStep.value = 'api_key'
+}
+
+function formSubmitApiKey() {
+  if (!formApiKey.value.trim()) return
+  store.wizardHistory.push({ question: 'API Key', answer: '***' })
+  if (formAuthChoice.value === 'custom-api-key') {
+    formStep.value = 'custom_base_url'
+  } else {
+    formExecute()
+  }
+}
+
+function formSubmitBaseUrl() {
+  store.wizardHistory.push({ question: 'Base URL', answer: formBaseUrl.value || '(默认)' })
+  formStep.value = 'custom_model_id'
+}
+
+function formSubmitModelId() {
+  store.wizardHistory.push({ question: 'Model ID', answer: formModelId.value || '(默认)' })
+  formExecute()
+}
+
+async function formExecute() {
+  formStep.value = 'running'
+  formRunning.value = true
+  formLogs.value = []
+  store.wizardError = null
+
+  const unlog = await listen<{ line: string }>('onboard:log', (e) => {
+    formLogs.value.push(e.payload.line)
+  })
+
+  try {
+    const params: OnboardParams = {
+      auth_choice: formAuthChoice.value,
+      api_key: formApiKey.value,
+      custom_base_url: formBaseUrl.value,
+      custom_model_id: formModelId.value,
+    }
+    await runOnboard(params)
+    formRunning.value = false
+    startGateway()
+  } catch (e: unknown) {
+    formRunning.value = false
+    store.wizardError = (e as Error)?.message ?? String(e)
+  } finally {
+    unlog()
+  }
+}
 
 /** multiselect 本地光标与勾选状态（不依赖后端 selected 检测） */
 const msCursor = ref(0)
@@ -222,6 +297,21 @@ async function handleStart() {
   store.wizardExitCode = null
   store.wizardPrompt = null
   store.wizardHistory = []
+
+  if (isWindows) {
+    formMode.value = true
+    formStep.value = 'auth_choice'
+    formAuthChoice.value = ''
+    formApiKey.value = ''
+    formBaseUrl.value = ''
+    formModelId.value = ''
+    formLogs.value = []
+    formRunning.value = false
+    store.wizardRunning = true
+    starting.value = false
+    return
+  }
+
   try {
     await startOnboardWizard()
     store.wizardRunning = true
@@ -340,11 +430,13 @@ async function startGateway() {
 }
 
 function handleClose() {
-  if (store.wizardRunning) killOnboardWizard().catch(() => {})
+  if (store.wizardRunning && !formMode.value) killOnboardWizard().catch(() => {})
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   unlockSending()
   screenText.value = ''
   screenCursorRow.value = 0
+  formMode.value = false
+  formRunning.value = false
   store.closeWizard()
 }
 
@@ -380,7 +472,7 @@ async function goToChat() {
               <div>
                 <div class="text-[15px] font-bold text-[#1f1f2e]">OpenClaw 初始化</div>
                 <div class="text-[11px] text-[#9b8ec4]">
-                  {{ store.wizardGatewayDone ? '初始化完成' : store.wizardStartingGateway ? '正在启动网关…' : store.wizardRunning ? '配置向导' : '点击开始' }}
+                  {{ store.wizardGatewayDone ? '初始化完成' : store.wizardStartingGateway ? '正在启动网关…' : formRunning ? '正在执行…' : store.wizardRunning ? '配置向导' : '点击开始' }}
                 </div>
               </div>
             </div>
@@ -434,11 +526,103 @@ async function goToChat() {
               </div>
             </template>
 
-            <!-- 等待第一个 prompt 的 loading -->
-            <div v-if="store.wizardRunning && !store.wizardPrompt" class="flex flex-col items-center gap-3 py-10">
+            <!-- 等待第一个 prompt 的 loading（PTY 模式） -->
+            <div v-if="store.wizardRunning && !store.wizardPrompt && !formMode" class="flex flex-col items-center gap-3 py-10">
               <span class="w-7 h-7 border-[2.5px] border-secondary border-t-transparent rounded-full animate-spin" />
               <span class="text-[13px] text-[#9b8ec4]">正在加载配置项…</span>
             </div>
+
+            <!-- ═══ Windows 表单模式 ═══ -->
+            <template v-if="formMode && store.wizardRunning">
+              <!-- 步骤 1: 选择认证提供商 -->
+              <div v-if="formStep === 'auth_choice'" class="flex flex-col gap-2">
+                <p class="text-[13px] font-medium text-[#4a4568] m-0">模型 / 认证提供商</p>
+                <button
+                  v-for="opt in AUTH_OPTIONS"
+                  :key="opt.value"
+                  type="button"
+                  class="flex items-center gap-3 px-4 py-3 rounded-xl border text-left transition cursor-pointer border-[#e8e2f4] bg-white text-[#4a4568] hover:border-secondary/30 hover:bg-secondary/5"
+                  @click="formSelectAuth(opt.value)"
+                >
+                  <span class="w-4 h-4 rounded-full border-2 border-[#c4bdd8] shrink-0" />
+                  <span class="text-[13px] font-medium">{{ opt.label }}</span>
+                </button>
+              </div>
+
+              <!-- 步骤 2: 输入 API Key -->
+              <div v-else-if="formStep === 'api_key'" class="flex flex-col gap-3">
+                <p class="text-[13px] font-medium text-[#4a4568] m-0">
+                  输入 {{ AUTH_OPTIONS.find(o => o.value === formAuthChoice)?.label ?? '' }}
+                </p>
+                <input
+                  v-model="formApiKey"
+                  type="password"
+                  class="w-full px-4 py-3 text-[13px] border border-[#e8e2f4] rounded-xl outline-none focus:border-secondary focus:shadow-[0_0_0_3px_rgba(95,71,206,0.08)]"
+                  placeholder="sk-..."
+                  autocomplete="off"
+                  @keyup.enter="formSubmitApiKey()"
+                />
+                <button
+                  type="button"
+                  class="self-end px-5 py-2 text-[13px] font-medium text-white rounded-[8px] cursor-pointer transition bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] shadow-[0_2px_8px_rgba(95,71,206,0.2)] disabled:opacity-50 disabled:cursor-not-allowed"
+                  :disabled="!formApiKey.trim()"
+                  @click="formSubmitApiKey()"
+                >
+                  确认
+                </button>
+              </div>
+
+              <!-- 步骤 3: Custom Base URL -->
+              <div v-else-if="formStep === 'custom_base_url'" class="flex flex-col gap-3">
+                <p class="text-[13px] font-medium text-[#4a4568] m-0">自定义 Base URL（可选）</p>
+                <input
+                  v-model="formBaseUrl"
+                  type="text"
+                  class="w-full px-4 py-3 text-[13px] border border-[#e8e2f4] rounded-xl outline-none focus:border-secondary focus:shadow-[0_0_0_3px_rgba(95,71,206,0.08)]"
+                  placeholder="https://api.example.com/v1（留空使用默认）"
+                  autocomplete="off"
+                  @keyup.enter="formSubmitBaseUrl()"
+                />
+                <button
+                  type="button"
+                  class="self-end px-5 py-2 text-[13px] font-medium text-white rounded-[8px] cursor-pointer transition bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] shadow-[0_2px_8px_rgba(95,71,206,0.2)]"
+                  @click="formSubmitBaseUrl()"
+                >
+                  {{ formBaseUrl.trim() ? '确认' : '跳过' }}
+                </button>
+              </div>
+
+              <!-- 步骤 4: Custom Model ID -->
+              <div v-else-if="formStep === 'custom_model_id'" class="flex flex-col gap-3">
+                <p class="text-[13px] font-medium text-[#4a4568] m-0">自定义 Model ID（可选）</p>
+                <input
+                  v-model="formModelId"
+                  type="text"
+                  class="w-full px-4 py-3 text-[13px] border border-[#e8e2f4] rounded-xl outline-none focus:border-secondary focus:shadow-[0_0_0_3px_rgba(95,71,206,0.08)]"
+                  placeholder="gpt-4o（留空使用默认）"
+                  autocomplete="off"
+                  @keyup.enter="formSubmitModelId()"
+                />
+                <button
+                  type="button"
+                  class="self-end px-5 py-2 text-[13px] font-medium text-white rounded-[8px] cursor-pointer transition bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] shadow-[0_2px_8px_rgba(95,71,206,0.2)]"
+                  @click="formSubmitModelId()"
+                >
+                  {{ formModelId.trim() ? '确认' : '跳过' }}
+                </button>
+              </div>
+
+              <!-- 步骤 5: 执行中 -->
+              <div v-else-if="formStep === 'running'" class="flex flex-col gap-3">
+                <div v-if="formRunning" class="flex items-center gap-3 px-4 py-4 rounded-xl bg-[#faf9ff] border border-[#f0ecfa]">
+                  <span class="w-5 h-5 border-[2.5px] border-secondary border-t-transparent rounded-full animate-spin shrink-0" />
+                  <span class="text-[13px] text-[#4a4568]">正在执行 openclaw onboard...</span>
+                </div>
+                <div v-if="formLogs.length" class="bg-[#1a1030] rounded-xl p-4 font-mono text-[11px] leading-[1.6] overflow-auto max-h-[200px]">
+                  <div v-for="(line, i) in formLogs" :key="i" class="text-green-400 whitespace-pre-wrap">{{ line }}</div>
+                </div>
+              </div>
+            </template>
 
             <!-- 历史记录 -->
             <div
