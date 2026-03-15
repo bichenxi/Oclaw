@@ -208,9 +208,12 @@ fn detect_node_strategy(home_dir: &std::path::Path) -> NodeStrategy {
 // 可能失败，导致 OpenClaw gateway 配置文件写入异常、进程闪退（WebSocket 1006）。
 //
 // 修正策略（优先级从高到低）：
-//   1. 使用 C:\Users 作为 HOME，.openclaw 目录落在 C:\Users\.openclaw，彻底回避中文路径。
-//   2. 若 C:\Users 不可写（无管理员权限），回退到用户目录的 8.3 短路径名。
-//   3. 都不行则返回 None，使用原始路径。
+//   1. D:\.openclaw — D 盘根目录（存在 D: 盘且可写时优先，与系统盘分离）
+//   2. C:\.openclaw — C 盘根目录（兜底，几乎所有 Windows 都有 C 盘）
+//   3. 8.3 短路径名 — 如上述根目录都不可写，回退到用户目录的 8.3 别名
+//   4. 都不行则返回 None，使用原始路径。
+//
+// 注意：.openclaw 目录名由 OpenClaw Node.js CLI 硬编码，不可更改。
 
 /// 缓存检测结果，避免每次启动进程都调用 PowerShell / 创建目录。
 #[cfg(target_os = "windows")]
@@ -243,8 +246,8 @@ fn get_short_path_name(long_path: &str) -> Option<String> {
         })
 }
 
-/// 尝试将旧位置（用户主目录下）的 .openclaw 配置迁移到 C:\Users\.openclaw。
-/// 仅在新目录为空且旧目录存在时执行，避免覆盖已有数据。
+/// 尝试将旧位置（用户主目录下）的 .openclaw 配置迁移到新 HOME 下。
+/// 仅在新目录无 openclaw.json 且旧目录有时执行，不会覆盖已有数据。
 #[cfg(target_os = "windows")]
 fn migrate_openclaw_config(old_home: &str, new_home: &str) {
     let old_dir = std::path::Path::new(old_home).join(".openclaw");
@@ -252,12 +255,10 @@ fn migrate_openclaw_config(old_home: &str, new_home: &str) {
     if !old_dir.exists() {
         return;
     }
-    let new_config = new_dir.join("openclaw.json");
-    if new_config.exists() {
+    if new_dir.join("openclaw.json").exists() {
         return;
     }
-    let old_config = old_dir.join("openclaw.json");
-    if !old_config.exists() {
+    if !old_dir.join("openclaw.json").exists() {
         return;
     }
     let _ = std::fs::create_dir_all(&new_dir);
@@ -278,9 +279,24 @@ fn migrate_openclaw_config(old_home: &str, new_home: &str) {
     copy_dir_recursive(&old_dir, &new_dir);
 }
 
+/// 检测磁盘根目录是否存在且可写（通过尝试创建 .openclaw 目录判断）。
+#[cfg(target_os = "windows")]
+fn try_root_dir_as_home(root: &str, user_home: &str) -> Option<String> {
+    let root_path = std::path::Path::new(root);
+    if !root_path.exists() {
+        return None;
+    }
+    let probe = root_path.join(".openclaw");
+    if std::fs::create_dir_all(&probe).is_ok() {
+        migrate_openclaw_config(user_home, root);
+        Some(root.to_string())
+    } else {
+        None
+    }
+}
+
 /// 当用户主目录包含非 ASCII 字符时，返回 ASCII 安全的 HOME 路径；否则返回 None。
-/// 优先使用 `C:\Users`（.openclaw 落在 `C:\Users\.openclaw`），
-/// 不可写时回退到 8.3 短路径。结果被缓存。
+/// 优先级：D:\ → C:\ → 8.3 短路径。结果被缓存。
 #[cfg(target_os = "windows")]
 pub(crate) fn safe_home_for_openclaw() -> Option<String> {
     SAFE_HOME_CACHE
@@ -289,14 +305,15 @@ pub(crate) fn safe_home_for_openclaw() -> Option<String> {
             if !path_has_non_ascii(&home) {
                 return None;
             }
-            // 策略 1：C:\Users\.openclaw
-            let users_dir = r"C:\Users";
-            let probe_dir = std::path::Path::new(users_dir).join(".openclaw");
-            if std::fs::create_dir_all(&probe_dir).is_ok() {
-                migrate_openclaw_config(&home, users_dir);
-                return Some(users_dir.to_string());
+            // 策略 1：D:\.openclaw（D 盘存在且可写时优先）
+            if let Some(d) = try_root_dir_as_home(r"D:\", &home) {
+                return Some(d);
             }
-            // 策略 2：8.3 短路径
+            // 策略 2：C:\.openclaw
+            if let Some(c) = try_root_dir_as_home(r"C:\", &home) {
+                return Some(c);
+            }
+            // 策略 3：8.3 短路径
             get_short_path_name(&home)
         })
         .clone()
@@ -1742,7 +1759,7 @@ pub struct EnvironmentInfo {
     pub strategy: String,
     /// Windows: 用户主目录包含非 ASCII 字符（中文用户名），可能导致 Node.js 文件操作异常
     pub unicode_home_warning: bool,
-    /// Windows: 已解析的 ASCII 安全路径（C:\Users 或 8.3 格式），None 表示无法自动修正
+    /// Windows: 已解析的 ASCII 安全路径（D:\ / C:\ / 8.3 短路径），None 表示无法自动修正
     pub safe_home: Option<String>,
 }
 
