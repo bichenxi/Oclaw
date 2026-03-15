@@ -319,6 +319,60 @@ pub(crate) fn safe_home_for_openclaw() -> Option<String> {
         .clone()
 }
 
+// ─── Windows: 纯 ASCII 的应用数据目录 ────────────────────────────────────────
+//
+// 当 USERPROFILE 含中文时，Tauri 的 app_data_dir（%LOCALAPPDATA%\com.claw.browser）
+// 和 npm 全局目录（%APPDATA%\npm）也在中文路径下。Node.js native 模块编译和
+// fs.rename 在这些路径上可能失败。
+//
+// 解决方案：将 fnm 数据目录和 npm 全局安装目录统一重定向到纯 ASCII 路径。
+// 复用 safe_home_for_openclaw() 的结果，在其下创建 claw-browser 子目录。
+
+/// 缓存安全的应用数据根目录。
+#[cfg(target_os = "windows")]
+static SAFE_DATA_ROOT_CACHE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// 返回纯 ASCII 的应用数据根目录（如 `D:\claw-browser` 或 `C:\claw-browser`）。
+/// 用户名纯 ASCII 时返回 None（无需重定向）。
+#[cfg(target_os = "windows")]
+pub(crate) fn safe_data_root() -> Option<String> {
+    SAFE_DATA_ROOT_CACHE
+        .get_or_init(|| {
+            let safe_home = safe_home_for_openclaw()?;
+            let root = std::path::PathBuf::from(&safe_home).join("claw-browser");
+            std::fs::create_dir_all(&root).ok()?;
+            Some(root.to_string_lossy().to_string())
+        })
+        .clone()
+}
+
+/// 返回安全的 fnm 数据目录。中文用户名时重定向到 safe_data_root()/fnm。
+#[cfg(target_os = "windows")]
+pub(crate) fn safe_fnm_dir(app: &AppHandle) -> String {
+    if let Some(ref root) = safe_data_root() {
+        let dir = std::path::PathBuf::from(root).join("fnm");
+        let _ = std::fs::create_dir_all(&dir);
+        return dir.to_string_lossy().to_string();
+    }
+    app.path()
+        .app_data_dir()
+        .map(|p| p.join("fnm").to_string_lossy().to_string())
+        .unwrap_or_else(|_| {
+            let home = std::env::var("USERPROFILE")
+                .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string());
+            format!("{}\\AppData\\Local\\claw-browser\\fnm", home)
+        })
+}
+
+/// 返回安全的 npm 全局安装目录（--prefix）。中文用户名时重定向到 safe_data_root()/npm-global。
+#[cfg(target_os = "windows")]
+pub(crate) fn safe_npm_prefix() -> Option<String> {
+    let root = safe_data_root()?;
+    let dir = std::path::PathBuf::from(&root).join("npm-global");
+    let _ = std::fs::create_dir_all(&dir);
+    Some(dir.to_string_lossy().to_string())
+}
+
 /// 返回 .openclaw 目录的实际路径（跨平台）。
 /// Windows 非 ASCII 用户名时使用 safe home（C:\Users\.openclaw 或 8.3 短路径）。
 pub fn openclaw_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -345,7 +399,25 @@ pub fn build_openclaw_env_path(app: &tauri::AppHandle) -> String {
     let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
     let userprofile = std::env::var("USERPROFILE").unwrap_or_default();
 
-    // npm 全局目录
+    // ── 安全路径优先（中文用户名场景） ──────────────────────────────────────
+    // npm-global 安全目录（重定向后的 npm prefix）
+    if let Some(ref prefix) = safe_npm_prefix() {
+        extra.push(prefix.to_string());
+    }
+
+    // 安全 fnm 目录中的 node
+    let safe_fnm = safe_fnm_dir(app);
+    let safe_fnm_versions = std::path::PathBuf::from(&safe_fnm).join("node-versions");
+    if let Ok(rd) = std::fs::read_dir(&safe_fnm_versions) {
+        for e in rd.flatten() {
+            let install_dir = e.path().join("installation");
+            if install_dir.exists() {
+                extra.push(install_dir.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // npm 全局目录（默认位置）
     if !appdata.is_empty() {
         extra.push(format!("{}\\npm", appdata));
     }
@@ -389,7 +461,7 @@ pub fn build_openclaw_env_path(app: &tauri::AppHandle) -> String {
         extra.push(format!("{}\\scoop\\shims", userprofile));
     }
 
-    // 内置 fnm（Oclaw 应用数据目录）
+    // 内置 fnm（Tauri app_data_dir，非安全路径可能与 safe_fnm 相同）
     if let Ok(app_data) = app.path().app_data_dir() {
         let bundled = app_data.join("fnm").join("node-versions");
         if let Ok(rd) = std::fs::read_dir(&bundled) {
@@ -875,6 +947,9 @@ async fn run_login_shell_step(
         if let Some(ref safe_home) = safe_home_for_openclaw() {
             b.env("HOME", safe_home);
         }
+        if let Some(ref prefix) = safe_npm_prefix() {
+            b.env("NPM_CONFIG_PREFIX", prefix);
+        }
         inject_git_https_override(&mut b);
         b.spawn().map_err(|e| format!("启动命令失败：{}", e))?
     };
@@ -931,6 +1006,9 @@ async fn run_step(
         }
         if let Some(ref safe_home) = safe_home_for_openclaw() {
             cmd = cmd.env("HOME", safe_home);
+        }
+        if let Some(ref prefix) = safe_npm_prefix() {
+            cmd = cmd.env("NPM_CONFIG_PREFIX", prefix);
         }
         cmd = cmd
             .env("GIT_CONFIG_COUNT", "2")
@@ -1248,12 +1326,21 @@ fn try_symlink_from_which(app: &AppHandle, _which_cmd: &str, _home_dir: &std::pa
         return;
     }
 
+    let mut dirs_to_add: Vec<String> = Vec::new();
+
+    // 安全 npm-global 目录（中文用户名重定向后的位置）
+    if let Some(ref prefix) = safe_npm_prefix() {
+        let p = std::path::PathBuf::from(prefix);
+        if p.exists() {
+            dirs_to_add.push(prefix.clone());
+        }
+    }
+
     // 尝试找到 openclaw 所在目录并自动加入用户 PATH
     let appdata = std::env::var("APPDATA").unwrap_or_default();
     let fnm_node_dir = std::path::PathBuf::from(&appdata)
         .join("fnm")
         .join("node-versions");
-    let mut dirs_to_add: Vec<String> = Vec::new();
 
     if let Ok(entries) = std::fs::read_dir(&fnm_node_dir) {
         for entry in entries.flatten() {
@@ -1319,9 +1406,13 @@ fn try_symlink_bundled_fnm(app: &AppHandle, fnm_dir: &str, _home_dir: &std::path
 
     match bin_dir {
         Some(bin) => {
-            let dir_str = bin.to_string_lossy().to_string();
-            emit_log(app, &format!("内置 fnm Node.js 位于 {}", dir_str));
-            let added = try_add_to_user_path_windows(app, &[dir_str]);
+            let mut dirs_to_add = vec![bin.to_string_lossy().to_string()];
+            emit_log(app, &format!("内置 fnm Node.js 位于 {}", dirs_to_add[0]));
+            if let Some(ref prefix) = safe_npm_prefix() {
+                dirs_to_add.push(prefix.clone());
+                emit_log(app, &format!("npm 全局安装目录：{}", prefix));
+            }
+            let added = try_add_to_user_path_windows(app, &dirs_to_add);
             if added {
                 emit_log(app, "已自动将上述目录添加到用户 PATH（重启终端后生效）。");
             } else {
@@ -1372,6 +1463,10 @@ async fn run_install_steps(
                         app,
                         &format!("  .openclaw 配置目录：{}\\.openclaw", safe),
                     );
+                    emit_log(app, &format!("  fnm 数据目录：{}", fnm_dir));
+                    if let Some(ref prefix) = safe_npm_prefix() {
+                        emit_log(app, &format!("  npm 全局安装目录：{}", prefix));
+                    }
                 }
                 None => {
                     emit_log(
@@ -1652,23 +1747,23 @@ pub async fn start_install(app: AppHandle) -> Result<(), String> {
         *state.cancel_tx.lock().unwrap() = Some(tx);
     }
 
-    let fnm_dir = app
-        .path()
-        .app_data_dir()
-        .map(|p| p.join("fnm").to_string_lossy().to_string())
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string());
-            #[cfg(target_os = "windows")]
-            {
-                format!("{}\\AppData\\Local\\claw-browser\\fnm", home)
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                format!("{}/.local/share/claw-browser/fnm", home)
-            }
-        });
+    let fnm_dir = {
+        #[cfg(target_os = "windows")]
+        {
+            safe_fnm_dir(&app)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            app.path()
+                .app_data_dir()
+                .map(|p| p.join("fnm").to_string_lossy().to_string())
+                .unwrap_or_else(|_| {
+                    let home = std::env::var("HOME")
+                        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string());
+                    format!("{}/.local/share/claw-browser/fnm", home)
+                })
+        }
+    };
 
     let app2 = app.clone();
     let running2 = state.running.clone();
@@ -1993,33 +2088,39 @@ pub async fn full_uninstall(app: AppHandle) -> Result<UninstallResult, String> {
             .unwrap_or_else(|e| e),
     });
 
-    // ── 4. 删除内置 fnm 目录（含 Node.js） ──────────────────────────────
+    // ── 4. 删除内置 fnm 目录（含 Node.js）及安全数据目录 ────────────────
     emit_log(&app, "▶ 步骤 4/6：删除内置 fnm 及 Node.js…");
-    let fnm_dir = app
-        .path()
-        .app_data_dir()
-        .map(|p| p.join("fnm"))
-        .ok();
-    let fnm_ok = match &fnm_dir {
-        Some(d) if d.exists() => {
-            emit_log(&app, &format!("  删除 {}…", d.display()));
-            std::fs::remove_dir_all(d).is_ok()
+    let mut fnm_ok = true;
+
+    // 默认 app_data_dir 下的 fnm
+    if let Ok(app_data) = app.path().app_data_dir() {
+        let default_fnm = app_data.join("fnm");
+        if default_fnm.exists() {
+            emit_log(&app, &format!("  删除 {}…", default_fnm.display()));
+            if std::fs::remove_dir_all(&default_fnm).is_err() {
+                fnm_ok = false;
+            }
         }
-        Some(d) => {
-            emit_log(&app, &format!("  {} 不存在，跳过。", d.display()));
-            true
+    }
+
+    // Windows 安全路径下的 claw-browser 目录（含 fnm + npm-global）
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(ref root) = safe_data_root() {
+            let root_path = std::path::PathBuf::from(root);
+            if root_path.exists() {
+                emit_log(&app, &format!("  删除安全数据目录 {}…", root_path.display()));
+                if std::fs::remove_dir_all(&root_path).is_err() {
+                    fnm_ok = false;
+                }
+            }
         }
-        None => {
-            emit_log(&app, "  无法确定 app_data_dir，跳过。");
-            false
-        }
-    };
+    }
+
     steps.push(UninstallStepResult {
         name: "删除内置 fnm / Node.js".into(),
         ok: fnm_ok,
-        detail: fnm_dir
-            .map(|d| d.display().to_string())
-            .unwrap_or_else(|| "未知路径".into()),
+        detail: if fnm_ok { "已清理" } else { "部分删除失败" }.into(),
     });
 
     // ── 5. 删除安装标记文件 ─────────────────────────────────────────────

@@ -100,6 +100,9 @@ pub async fn run_onboard(app: AppHandle, params: OnboardParams) -> Result<(), St
         if let Some(ref safe_home) = crate::installer::safe_home_for_openclaw() {
             b.env("HOME", safe_home);
         }
+        if let Some(ref prefix) = crate::installer::safe_npm_prefix() {
+            b.env("NPM_CONFIG_PREFIX", prefix);
+        }
         b.spawn().map_err(|e| format!("启动 onboard 失败：{}", e))?
     };
 
@@ -606,6 +609,10 @@ pub fn start_onboard_wizard(app: AppHandle) -> Result<(), String> {
         if let Some(ref safe_home) = crate::installer::safe_home_for_openclaw() {
             cmd.env("HOME", safe_home);
             eprintln!("[wizard] 中文路径修正：HOME={}", safe_home);
+        }
+        if let Some(ref prefix) = crate::installer::safe_npm_prefix() {
+            cmd.env("NPM_CONFIG_PREFIX", prefix);
+            eprintln!("[wizard] npm prefix 修正：{}", prefix);
         }
         eprintln!("[wizard] 增强 PATH 已就绪");
         let _ = app.emit("wizard:raw-data", "[wizard] ConPTY 启动中…".to_string());

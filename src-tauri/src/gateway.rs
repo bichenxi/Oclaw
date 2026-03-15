@@ -234,6 +234,9 @@ pub fn restart_openclaw_gateway(app: AppHandle) -> Result<(), String> {
         if let Some(ref safe_home) = crate::installer::safe_home_for_openclaw() {
             cmd.env("HOME", safe_home);
         }
+        if let Some(ref prefix) = crate::installer::safe_npm_prefix() {
+            cmd.env("NPM_CONFIG_PREFIX", prefix);
+        }
         match cmd.output() {
             Ok(o) if o.status.success() => Ok(()),
             Ok(o) => {
