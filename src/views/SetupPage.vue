@@ -4,7 +4,6 @@ import { useTabsStore } from '@/stores/tabs'
 import { useOnboardStore } from '@/stores/onboard'
 import { startInstall, cancelInstall } from '@/api/installer'
 import { checkOpenclawAlive } from '@/api/openclaw'
-import { startOpenclawGateway } from '@/api/gateway'
 import { useAutoSetup } from '@/composables/useAutoSetup'
 
 const installerStore = useInstallerStore()
@@ -17,16 +16,6 @@ const logContainer = ref<HTMLElement | null>(null)
 const checking = ref(false)
 const notAliveHint = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
-
-// 一键启动状态（isOnboarded 场景）
-const launching = ref(false)
-const launchStep = ref<'starting' | 'configuring' | ''>('')
-const launchError = ref('')
-const launchStepLabel = computed(() => {
-  if (launchStep.value === 'starting') return '启动中...'
-  if (launchStep.value === 'configuring') return '配置中...'
-  return '处理中...'
-})
 
 onMounted(() => {
   installerStore.startListeners()
@@ -84,37 +73,6 @@ async function handleCheckAlive() {
   }
 }
 
-async function launchAndSetup() {
-  launching.value = true
-  launchStep.value = 'starting'
-  launchError.value = ''
-  try {
-    await startOpenclawGateway().catch(() => {})
-    // 轮询直到 gateway 上线，最多等 30 秒
-    await new Promise<void>((resolve, reject) => {
-      let count = 0
-      const timer = setInterval(async () => {
-        count++
-        const alive = await checkOpenclawAlive().catch(() => false)
-        if (alive) {
-          clearInterval(timer)
-          resolve()
-        } else if (count >= 30) {
-          clearInterval(timer)
-          reject(new Error('启动超时，请确认 OpenClaw 已正确安装'))
-        }
-      }, 1000)
-    })
-    launchStep.value = 'configuring'
-    await autoSetup()
-    tabsStore.switchToSpecialView('openclaw')
-  } catch (e: any) {
-    launchError.value = e?.message ?? String(e)
-    launching.value = false
-    launchStep.value = ''
-  }
-}
-
 async function handleStart() {
   installerStore.resetSteps()
   installerStore.installing = true
@@ -140,45 +98,22 @@ function copyCommand() {
     <!-- ── 已安装但未运行（非安装流程内的 needOnboard 状态） ── -->
     <template v-if="installerStore.isInstalled && !installerStore.installing && !installerStore.needOnboard">
 
-      <!-- ── 已完成 onboard：一键启动 ── -->
+      <!-- ── 已完成 onboard：等待 gateway 上线 ── -->
       <template v-if="installerStore.isOnboarded">
         <div class="flex flex-col items-center gap-3 mb-6">
           <img src="/logo.png" class="w-14 h-14 rounded-[12px] object-cover shadow-lg" alt="logo" />
           <h1 class="text-[22px] font-bold text-[#2d1f6e] m-0">OpenClaw 未运行</h1>
           <p class="text-[13px] text-[#7b6aa8] text-center max-w-[380px] leading-relaxed m-0">
-            已检测到完整配置，一键启动即可直接进入对话。
+            已检测到完整配置，请在终端执行 <code class="bg-[#f0ecfa] px-1.5 py-px rounded text-[11px]">openclaw gateway</code> 启动网关后点击下方检测。
           </p>
         </div>
 
-        <!-- 启动步骤反馈 -->
-        <div v-if="launching" class="w-full max-w-[400px] flex flex-col gap-2 mb-5">
-          <div
-            class="flex items-center gap-2.5 px-4 py-2.5 rounded-lg bg-white border text-[12px] transition"
-            :class="launchStep === 'starting' ? 'border-secondary/30 text-secondary' : 'border-[#e8e2f4] text-[#15803d]'"
-          >
-            <span v-if="launchStep === 'starting'" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin shrink-0" />
-            <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="shrink-0"><polyline points="20 6 9 17 4 12"/></svg>
-            启动 Gateway 服务
-          </div>
-          <div
-            class="flex items-center gap-2.5 px-4 py-2.5 rounded-lg bg-white border text-[12px] transition"
-            :class="launchStep === 'configuring' ? 'border-secondary/30 text-secondary' : 'border-[#e8e2f4] text-[#c4bdd8]'"
-          >
-            <span v-if="launchStep === 'configuring'" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin shrink-0" />
-            <span v-else class="w-3 h-3 rounded-full border-2 border-current shrink-0" />
-            检测配置并同步认证信息
-          </div>
-        </div>
+        <p v-if="notAliveHint" class="text-[12px] text-red-500 mb-3 m-0">
+          仍未检测到 OpenClaw，请确认网关已启动。
+        </p>
 
-        <!-- 错误提示 -->
-        <div v-if="launchError" class="w-full max-w-[400px] px-4 py-3 mb-4 rounded-xl bg-red-50 border border-red-200 text-[12px] text-red-600">
-          {{ launchError }}
-        </div>
-
-        <!-- 主按钮 -->
-        <button class="btn mb-5 flex items-center gap-2" :disabled="launching" @click="launchAndSetup">
-          <span v-if="launching" class="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-          {{ launching ? launchStepLabel : '一键启动' }}
+        <button class="btn mb-5 flex items-center gap-2" :disabled="checking" @click="handleCheckAlive">
+          {{ checking ? '检测中...' : '检测连接' }}
         </button>
 
         <!-- 次级：重新配置向导 -->
