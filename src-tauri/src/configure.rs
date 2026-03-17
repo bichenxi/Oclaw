@@ -329,7 +329,12 @@ fn parse_screen_for_prompt(screen_text: &str, cursor_row: u16) -> Option<WizardP
         });
     }
 
-    // 兜底：text input（body 为空或只有光标区域）
+    // 兜底：text input，仅在确实存在活跃 prompt（◆）时返回。
+    // Windows 上进程启动初期屏幕尚未就绪，无 ◆ 标记时不应误判为 input，
+    // 返回 None 让前端保持 loading 状态。
+    if prompt_idx.is_none() {
+        return None;
+    }
     Some(WizardPrompt {
         prompt_type: "input".to_string(),
         question,

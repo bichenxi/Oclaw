@@ -172,6 +172,8 @@ const i18nMap: Record<string, string> = {
   'Do this later': '稍后再说',
   'What do you want to set up?': '你想设置什么？',
   'Workspace directory': '工作区目录',
+  'Onboarding complete. Dashboard opened; keep that tab to control OpenClaw.': '初始化完成！',
+  'Onboarding complete!': '初始化完成！',
 
   // ── 通用 ──
   'OpenAI (Codex OAuth + API key)': 'OpenAI（Codex OAuth + API Key）',
@@ -186,6 +188,7 @@ const i18nPrefixMap: Array<[string, string]> = [
   ['Local gateway (this machine)', '本地网关（本机）'],
   ['Remote gateway', '远程网关（仅信息）'],
   ['Keep current (', '保持当前（'],
+  ['Onboarding complete', '初始化完成'],
 ]
 
 function t(text: string): string {
@@ -240,6 +243,10 @@ function startListeners() {
     }
     store.wizardPrompt = next
     waitingNext.value = false
+
+    if (next.prompt_type === 'done') {
+      startGateway()
+    }
 
     if (next.prompt_type === 'multiselect') {
       if (msQuestion.value !== next.question) {
@@ -411,6 +418,7 @@ async function answerInput() {
 }
 
 async function startGateway() {
+  if (store.wizardStartingGateway || store.wizardGatewayDone) return
   store.wizardStartingGateway = true
   try {
     await restartOpenclawGateway()
@@ -683,7 +691,7 @@ async function goToChat() {
               <span class="w-6 h-6 border-[2.5px] border-secondary border-t-transparent rounded-full animate-spin" />
               <span class="text-[12px] text-[#9b8ec4]">正在处理…</span>
             </div>
-            <template v-else-if="store.wizardPrompt && store.wizardRunning">
+            <template v-else-if="store.wizardPrompt && (store.wizardRunning || store.wizardPrompt.prompt_type === 'done')">
               <!-- Confirm -->
               <div v-if="store.wizardPrompt.prompt_type === 'confirm'" class="flex flex-col gap-3">
                 <p class="text-[13px] font-medium text-[#4a4568] m-0">{{ t(store.wizardPrompt.question) }}</p>
@@ -817,11 +825,21 @@ async function goToChat() {
               </div>
 
               <!-- Done (from TUI) -->
-              <div v-else-if="store.wizardPrompt.prompt_type === 'done'" class="flex items-center gap-3 px-4 py-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-                <span class="text-[13px] font-medium">{{ t(store.wizardPrompt.question) }}</span>
+              <div v-else-if="store.wizardPrompt.prompt_type === 'done'" class="flex flex-col gap-3">
+                <div class="flex items-center gap-3 px-4 py-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  <span class="text-[13px] font-medium">{{ t(store.wizardPrompt.question) }}</span>
+                </div>
+                <button
+                  v-if="!store.wizardStartingGateway && !store.wizardGatewayDone"
+                  type="button"
+                  class="self-end px-5 py-2 text-[13px] font-medium text-white rounded-[8px] cursor-pointer transition bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] shadow-[0_2px_8px_rgba(95,71,206,0.2)]"
+                  @click="startGateway()"
+                >
+                  完成配置，启动网关
+                </button>
               </div>
 
               <!-- Info / 未知类型 -->
