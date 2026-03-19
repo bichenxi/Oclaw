@@ -5,7 +5,7 @@
 ## 角色与目标
 
 - **项目定位**：为与 OpenClaw 配合提供桌面浏览器壳（Tauri + Vue），不承载原业务逻辑，仅保留可运行的最小框架。
-- **协作方式**：在实现新功能、修 bug 或重构时，优先遵循本仓库约定与 `.agent/skills/` 下技能说明。
+- **协作方式**：在实现新功能、修 bug 或重构时，优先遵循本仓库约定与 `.agents/skills/` 下技能说明。
 
 ## 技术栈
 
@@ -32,4 +32,4 @@
 
 - 新增 Tauri 能力：在 `lib.rs` 中增加 `#[tauri::command]`，并在 `generate_handler![]` 中注册；前端通过 `@tauri-apps/api/core` 的 `invoke` 调用。
 - 新增页面：在 `src/pages/` 下新增 `.vue`，路由自动生成。
-- 项目专属的 AI 行为与约定见 **`.agent/skills/`** 下的技能文件。
+- 项目专属的 AI 行为与约定见 **`.agents/skills/`** 下的技能文件。
