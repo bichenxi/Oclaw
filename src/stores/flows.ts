@@ -3,7 +3,7 @@ import {
   listFlows, loadFlow, saveFlow, deleteFlow,
   initFlowExecution, updateNodeStatus, setNodeOutput,
   appendFlowLog, finishFlowExecution, getFlowExecution,
-  type AgentFlow, type FlowExecution, type NodeStatus, type FlowStatus,
+  type AgentFlow, type FlowExecution, type FlowStatus,
 } from '@/api/flows'
 
 export const useFlowsStore = defineStore('flows', () => {

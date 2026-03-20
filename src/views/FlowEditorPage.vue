@@ -3,7 +3,6 @@ import { VueFlow, useVueFlow, type Node, type Edge } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { useFlowsStore } from '@/stores/flows'
-import { useAgentsStore } from '@/stores/agents'
 import { listAgents, type AgentInfo } from '@/api/agents'
 import type { AgentFlow, FlowNode, FlowEdge } from '@/api/flows'
 
@@ -12,7 +11,6 @@ import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 
 const flowsStore = useFlowsStore()
-const agentsStore = useAgentsStore()
 
 const agents = ref<AgentInfo[]>([])
 const showFlowList = ref(true)
