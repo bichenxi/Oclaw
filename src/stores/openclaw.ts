@@ -24,10 +24,10 @@ export interface FlowExecutionState {
   task: string
   status: 'running' | 'completed' | 'failed'
   nodes: FlowNodeState[]
-  /** 各层节点 id，用于卡片布局 */
-  levelIds: string[][]
-  /** nodeId → 前驱 agent 节点的 label 列表（已过滤 start/end） */
-  predecessors: Record<string, string[]>
+  /** 并行分支，每个分支是从 start 出发的独立节点链（列显示） */
+  branches: string[][]
+  /** 分支汇聚后的顺序节点（全宽显示） */
+  convergeIds: string[]
 }
 
 export const useOpenclawStore = defineStore('openclaw', () => {
@@ -71,32 +71,19 @@ export const useOpenclawStore = defineStore('openclaw', () => {
   function createFlowExecution(
     flowName: string,
     task: string,
-    levels: { id: string; label: string }[][],
-    edges: { source: string; target: string }[],
+    allNodes: { id: string; label: string }[],
+    branches: string[][],
+    convergeIds: string[],
   ): string {
     const id = `fexec-${Date.now()}`
-    const allNodes = levels.flat()
-    const agentIds = new Set(allNodes.map(n => n.id))
-    const labelMap = new Map(allNodes.map(n => [n.id, n.label]))
-
-    // 计算每个 agent 节点的前驱 agent label（过滤掉 start/end）
-    const predecessors: Record<string, string[]> = {}
-    for (const e of edges) {
-      if (!agentIds.has(e.target)) continue
-      if (!agentIds.has(e.source)) continue  // source 是 start 节点，跳过
-      if (!predecessors[e.target]) predecessors[e.target] = []
-      const lbl = labelMap.get(e.source)
-      if (lbl) predecessors[e.target].push(lbl)
-    }
-
     flowExecutions.value[id] = {
       id,
       flowName,
       task,
       status: 'running',
       nodes: allNodes.map(n => ({ id: n.id, label: n.label, status: 'pending', output: '' })),
-      levelIds: levels.map(l => l.map(n => n.id)),
-      predecessors,
+      branches,
+      convergeIds,
     }
     return id
   }

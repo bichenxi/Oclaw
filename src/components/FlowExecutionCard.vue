@@ -7,32 +7,8 @@ const ocStore = useOpenclawStore()
 
 const exec = computed(() => ocStore.flowExecutions[props.executionId])
 
-function nodesByLevel(ids: string[]): FlowNodeState[] {
-  return ids.map(id => exec.value?.nodes.find(n => n.id === id)).filter(Boolean) as FlowNodeState[]
-}
-
-/**
- * 返回某层所有节点的前驱 label 列表（保留重复，体现多路汇聚）
- * 若一层内各节点前驱不同，合并去重展示
- */
-function getLevelPredecessors(levelIds: string[]): string[] {
-  if (!exec.value) return []
-  // 收集本层所有节点的前驱，去重（同一个前驱 label 只提一次）
-  const seen = new Set<string>()
-  const result: string[] = []
-  for (const nodeId of levelIds) {
-    for (const lbl of (exec.value.predecessors[nodeId] ?? [])) {
-      if (!seen.has(lbl)) { seen.add(lbl); result.push(lbl) }
-    }
-  }
-  return result
-}
-
-/** 判断某层是否"汇聚"（有多个来源） */
-function isConverge(levelIds: string[]): boolean {
-  if (!exec.value) return false
-  const total = levelIds.reduce((s, id) => s + (exec.value!.predecessors[id]?.length ?? 0), 0)
-  return total > 1
+function nodeById(id: string): FlowNodeState | undefined {
+  return exec.value?.nodes.find(n => n.id === id)
 }
 
 const overallIcon = computed(() => {
@@ -46,11 +22,13 @@ const elapsed = ref(0)
 let timer: ReturnType<typeof setInterval> | null = null
 onMounted(() => { timer = setInterval(() => elapsed.value++, 1000) })
 onUnmounted(() => { if (timer) clearInterval(timer) })
-watch(() => exec.value?.status, (s) => { if (s !== 'running' && timer) { clearInterval(timer); timer = null } })
+watch(() => exec.value?.status, s => { if (s !== 'running' && timer) { clearInterval(timer); timer = null } })
+
+const hasBranches = computed(() => (exec.value?.branches.length ?? 0) > 1)
 </script>
 
 <template>
-  <div v-if="exec" class="w-full max-w-[520px] rounded-[14px] border border-[#e8e2f4] bg-white shadow-[0_2px_12px_rgba(95,71,206,0.07)] overflow-hidden">
+  <div v-if="exec" class="w-full max-w-[540px] rounded-[14px] border border-[#e8e2f4] bg-white shadow-[0_2px_12px_rgba(95,71,206,0.07)] overflow-hidden">
 
     <!-- 卡片头 -->
     <div class="flex items-start gap-3 px-4 py-3 border-b border-[#f0ecfa] bg-[#faf9ff]">
@@ -81,97 +59,180 @@ watch(() => exec.value?.status, (s) => { if (s !== 'running' && timer) { clearIn
       </div>
     </div>
 
-    <!-- 层级节点 -->
-    <div class="flex flex-col px-4 py-3 gap-0">
-      <template v-for="(levelIds, li) in exec.levelIds" :key="li">
+    <div class="px-4 py-3 flex flex-col gap-2">
 
-        <!-- 层间连接注释（第一层不显示） -->
-        <div v-if="li > 0" class="flex items-center gap-2 py-1.5 pl-1">
-          <div class="flex flex-col items-center gap-0 shrink-0 w-4">
-            <div class="w-px h-3 bg-[#ddd8f0]" />
-            <!-- 下箭头 -->
-            <svg width="7" height="5" viewBox="0 0 7 5" fill="#c4bdd8"><path d="M3.5 5L0 0h7L3.5 5z"/></svg>
-          </div>
-          <span class="text-[10px] text-[#b8b0cc] leading-tight">
-            <template v-if="getLevelPredecessors(levelIds).length === 0">继续</template>
-            <template v-else-if="isConverge(levelIds)">
-              汇聚
-              <span v-for="(lbl, pi) in getLevelPredecessors(levelIds)" :key="pi"
-                class="mx-0.5 px-1.5 py-px rounded bg-[#f0ecfa] text-[#7c5cfc] text-[10px]">{{ lbl }}</span>
-            </template>
-            <template v-else>
-              继自
-              <span v-for="(lbl, pi) in getLevelPredecessors(levelIds)" :key="pi"
-                class="mx-0.5 px-1.5 py-px rounded bg-[#f0ecfa] text-[#7c5cfc] text-[10px]">{{ lbl }}</span>
-            </template>
-          </span>
+      <!-- ── 并行分支区（列排列） ── -->
+      <div
+        v-if="hasBranches"
+        class="grid gap-3 items-start"
+        :style="`grid-template-columns: repeat(${exec.branches.length}, 1fr)`"
+      >
+        <div v-for="(branch, bi) in exec.branches" :key="bi" class="flex flex-col gap-1">
+          <template v-for="(nodeId, ni) in branch" :key="nodeId">
+            <!-- 节点卡 -->
+            <div
+              v-if="nodeById(nodeId)"
+              class="flex flex-col gap-1 p-2.5 rounded-[10px] border transition-all duration-300"
+              :class="{
+                'bg-[#f8f8fb] border-[#ede8f8]': nodeById(nodeId)!.status === 'pending',
+                'bg-blue-50 border-blue-200': nodeById(nodeId)!.status === 'running',
+                'bg-emerald-50 border-emerald-200': nodeById(nodeId)!.status === 'completed',
+                'bg-red-50 border-red-200': nodeById(nodeId)!.status === 'failed',
+              }"
+            >
+              <div class="flex items-center gap-1.5">
+                <span class="shrink-0 w-4 h-4 flex-center">
+                  <svg v-if="nodeById(nodeId)!.status === 'running'" class="animate-spin" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="3"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+                  <svg v-else-if="nodeById(nodeId)!.status === 'completed'" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  <svg v-else-if="nodeById(nodeId)!.status === 'failed'" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#c4bdd8" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+                </span>
+                <span
+                  class="text-[12px] font-semibold truncate"
+                  :class="{
+                    'text-[#b8b0cc]': nodeById(nodeId)!.status === 'pending',
+                    'text-blue-700': nodeById(nodeId)!.status === 'running',
+                    'text-emerald-700': nodeById(nodeId)!.status === 'completed',
+                    'text-red-600': nodeById(nodeId)!.status === 'failed',
+                  }"
+                >{{ nodeById(nodeId)!.label }}</span>
+              </div>
+              <div class="text-[11px] leading-[1.5] pl-[22px]">
+                <span v-if="nodeById(nodeId)!.status === 'pending'" class="text-[#c4bdd8]">等待中</span>
+                <span v-else-if="nodeById(nodeId)!.status === 'running'" class="text-blue-400 flex items-center gap-1">
+                  <span class="inline-flex gap-0.5">
+                    <span class="w-[4px] h-[4px] rounded-full bg-blue-400" style="animation:td 1.2s ease-in-out infinite"/>
+                    <span class="w-[4px] h-[4px] rounded-full bg-blue-400" style="animation:td 1.2s ease-in-out infinite 0.2s"/>
+                    <span class="w-[4px] h-[4px] rounded-full bg-blue-400" style="animation:td 1.2s ease-in-out infinite 0.4s"/>
+                  </span>
+                </span>
+                <span v-else-if="nodeById(nodeId)!.status === 'failed'" class="text-red-500 line-clamp-2 break-words">{{ nodeById(nodeId)!.error }}</span>
+                <span v-else class="text-[#4b4568] line-clamp-2 break-words">{{ nodeById(nodeId)!.output }}</span>
+              </div>
+            </div>
+            <!-- 分支内节点间连接箭头 -->
+            <div v-if="ni < branch.length - 1" class="flex justify-center py-0.5">
+              <div class="flex flex-col items-center">
+                <div class="w-px h-2.5 bg-[#ddd8f0]"/>
+                <svg width="7" height="5" viewBox="0 0 7 5" fill="#c4bdd8"><path d="M3.5 5L0 0h7z"/></svg>
+              </div>
+            </div>
+          </template>
         </div>
+      </div>
 
-        <!-- 并行标签 -->
-        <div v-if="levelIds.length > 1" class="flex items-center gap-1 mb-1.5 pl-1">
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
-          <span class="text-[10px] font-semibold text-amber-600 uppercase tracking-wider">并行</span>
-        </div>
-
-        <!-- 节点行 -->
-        <div
-          :class="levelIds.length > 1 ? 'grid gap-2' : 'flex'"
-          :style="levelIds.length > 1 ? `grid-template-columns: repeat(${Math.min(levelIds.length, 3)}, 1fr)` : ''"
-        >
-          <div
-            v-for="node in nodesByLevel(levelIds)"
-            :key="node.id"
-            class="flex flex-col gap-1 p-2.5 rounded-[10px] border transition-all duration-300"
+      <!-- ── 单分支（顺序流） ── -->
+      <template v-else-if="(exec.branches.length === 1)">
+        <template v-for="(nodeId, ni) in exec.branches[0]" :key="nodeId">
+          <div v-if="nodeById(nodeId)" class="flex flex-col gap-1 p-2.5 rounded-[10px] border transition-all duration-300"
             :class="{
-              'bg-[#f8f8fb] border-[#ede8f8] flex-1': node.status === 'pending',
-              'bg-blue-50 border-blue-200 flex-1': node.status === 'running',
-              'bg-emerald-50 border-emerald-200 flex-1': node.status === 'completed',
-              'bg-red-50 border-red-200 flex-1': node.status === 'failed',
+              'bg-[#f8f8fb] border-[#ede8f8]': nodeById(nodeId)!.status === 'pending',
+              'bg-blue-50 border-blue-200': nodeById(nodeId)!.status === 'running',
+              'bg-emerald-50 border-emerald-200': nodeById(nodeId)!.status === 'completed',
+              'bg-red-50 border-red-200': nodeById(nodeId)!.status === 'failed',
             }"
           >
-            <!-- 节点头 -->
             <div class="flex items-center gap-1.5">
               <span class="shrink-0 w-4 h-4 flex-center">
-                <svg v-if="node.status === 'running'" class="animate-spin" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="3"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
-                <svg v-else-if="node.status === 'completed'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-                <svg v-else-if="node.status === 'failed'" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#c4bdd8" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+                <svg v-if="nodeById(nodeId)!.status === 'running'" class="animate-spin" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="3"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+                <svg v-else-if="nodeById(nodeId)!.status === 'completed'" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <svg v-else-if="nodeById(nodeId)!.status === 'failed'" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#c4bdd8" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
               </span>
-              <span
-                class="text-[12px] font-semibold truncate"
+              <span class="text-[12px] font-semibold truncate"
                 :class="{
-                  'text-[#b8b0cc]': node.status === 'pending',
-                  'text-blue-700': node.status === 'running',
-                  'text-emerald-700': node.status === 'completed',
-                  'text-red-600': node.status === 'failed',
+                  'text-[#b8b0cc]': nodeById(nodeId)!.status === 'pending',
+                  'text-blue-700': nodeById(nodeId)!.status === 'running',
+                  'text-emerald-700': nodeById(nodeId)!.status === 'completed',
+                  'text-red-600': nodeById(nodeId)!.status === 'failed',
                 }"
-              >{{ node.label }}</span>
+              >{{ nodeById(nodeId)!.label }}</span>
             </div>
-            <!-- 输出文本 -->
             <div class="text-[11px] leading-[1.5] pl-[22px]">
-              <span v-if="node.status === 'pending'" class="text-[#c4bdd8]">等待中...</span>
-              <span v-else-if="node.status === 'running'" class="text-blue-400 flex items-center gap-1">
+              <span v-if="nodeById(nodeId)!.status === 'pending'" class="text-[#c4bdd8]">等待中</span>
+              <span v-else-if="nodeById(nodeId)!.status === 'running'" class="text-blue-400 flex items-center gap-1">
                 <span class="inline-flex gap-0.5">
-                  <span class="w-[4px] h-[4px] rounded-full bg-blue-400" style="animation:typing-dot 1.2s ease-in-out infinite"/>
-                  <span class="w-[4px] h-[4px] rounded-full bg-blue-400" style="animation:typing-dot 1.2s ease-in-out infinite 0.2s"/>
-                  <span class="w-[4px] h-[4px] rounded-full bg-blue-400" style="animation:typing-dot 1.2s ease-in-out infinite 0.4s"/>
+                  <span class="w-[4px] h-[4px] rounded-full bg-blue-400" style="animation:td 1.2s ease-in-out infinite"/>
+                  <span class="w-[4px] h-[4px] rounded-full bg-blue-400" style="animation:td 1.2s ease-in-out infinite 0.2s"/>
+                  <span class="w-[4px] h-[4px] rounded-full bg-blue-400" style="animation:td 1.2s ease-in-out infinite 0.4s"/>
                 </span>
-                思考中
               </span>
-              <span v-else-if="node.status === 'failed'" class="text-red-500 line-clamp-2 break-words">{{ node.error }}</span>
-              <span v-else class="text-[#4b4568] line-clamp-2 break-words">{{ node.output }}</span>
+              <span v-else-if="nodeById(nodeId)!.status === 'failed'" class="text-red-500 line-clamp-2 break-words">{{ nodeById(nodeId)!.error }}</span>
+              <span v-else class="text-[#4b4568] line-clamp-2 break-words">{{ nodeById(nodeId)!.output }}</span>
             </div>
           </div>
-        </div>
-
+          <div v-if="ni < exec.branches[0].length - 1" class="flex justify-center py-0.5">
+            <div class="flex flex-col items-center">
+              <div class="w-px h-3 bg-[#ddd8f0]"/>
+              <svg width="7" height="5" viewBox="0 0 7 5" fill="#c4bdd8"><path d="M3.5 5L0 0h7z"/></svg>
+            </div>
+          </div>
+        </template>
       </template>
-    </div>
 
+      <!-- ── 汇聚分隔线（有分支且有汇聚节点时显示） ── -->
+      <div v-if="hasBranches && exec.convergeIds.length > 0" class="flex items-center gap-2 pt-1">
+        <div class="flex-1 h-px bg-[#e8e2f4]"/>
+        <div class="flex items-center gap-1 text-[10px] font-medium text-[#9b8ec4]">
+          <svg width="10" height="7" viewBox="0 0 10 7" fill="#c4bdd8"><path d="M5 7L0 0h10z"/></svg>
+          汇聚
+        </div>
+        <div class="flex-1 h-px bg-[#e8e2f4]"/>
+      </div>
+
+      <!-- ── 汇聚区节点 ── -->
+      <template v-for="(nodeId, ci) in exec.convergeIds" :key="nodeId">
+        <div v-if="nodeById(nodeId)" class="flex flex-col gap-1 p-2.5 rounded-[10px] border transition-all duration-300"
+          :class="{
+            'bg-[#f8f8fb] border-[#ede8f8]': nodeById(nodeId)!.status === 'pending',
+            'bg-blue-50 border-blue-200': nodeById(nodeId)!.status === 'running',
+            'bg-emerald-50 border-emerald-200': nodeById(nodeId)!.status === 'completed',
+            'bg-red-50 border-red-200': nodeById(nodeId)!.status === 'failed',
+          }"
+        >
+          <div class="flex items-center gap-1.5">
+            <span class="shrink-0 w-4 h-4 flex-center">
+              <svg v-if="nodeById(nodeId)!.status === 'running'" class="animate-spin" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="3"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>
+              <svg v-else-if="nodeById(nodeId)!.status === 'completed'" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <svg v-else-if="nodeById(nodeId)!.status === 'failed'" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#c4bdd8" stroke-width="2"><circle cx="12" cy="12" r="9"/></svg>
+            </span>
+            <span class="text-[12px] font-semibold truncate"
+              :class="{
+                'text-[#b8b0cc]': nodeById(nodeId)!.status === 'pending',
+                'text-blue-700': nodeById(nodeId)!.status === 'running',
+                'text-emerald-700': nodeById(nodeId)!.status === 'completed',
+                'text-red-600': nodeById(nodeId)!.status === 'failed',
+              }"
+            >{{ nodeById(nodeId)!.label }}</span>
+          </div>
+          <div class="text-[11px] leading-[1.5] pl-[22px]">
+            <span v-if="nodeById(nodeId)!.status === 'pending'" class="text-[#c4bdd8]">等待中</span>
+            <span v-else-if="nodeById(nodeId)!.status === 'running'" class="text-blue-400 flex items-center gap-1">
+              <span class="inline-flex gap-0.5">
+                <span class="w-[4px] h-[4px] rounded-full bg-blue-400" style="animation:td 1.2s ease-in-out infinite"/>
+                <span class="w-[4px] h-[4px] rounded-full bg-blue-400" style="animation:td 1.2s ease-in-out infinite 0.2s"/>
+                <span class="w-[4px] h-[4px] rounded-full bg-blue-400" style="animation:td 1.2s ease-in-out infinite 0.4s"/>
+              </span>
+            </span>
+            <span v-else-if="nodeById(nodeId)!.status === 'failed'" class="text-red-500 line-clamp-2 break-words">{{ nodeById(nodeId)!.error }}</span>
+            <span v-else class="text-[#4b4568] line-clamp-2 break-words">{{ nodeById(nodeId)!.output }}</span>
+          </div>
+        </div>
+        <div v-if="ci < exec.convergeIds.length - 1" class="flex justify-center py-0.5">
+          <div class="flex flex-col items-center">
+            <div class="w-px h-3 bg-[#ddd8f0]"/>
+            <svg width="7" height="5" viewBox="0 0 7 5" fill="#c4bdd8"><path d="M3.5 5L0 0h7z"/></svg>
+          </div>
+        </div>
+      </template>
+
+    </div>
   </div>
 </template>
 
 <style scoped>
-@keyframes typing-dot {
+@keyframes td {
   0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
   40% { opacity: 1; transform: scale(1); }
 }

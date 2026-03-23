@@ -13,6 +13,7 @@ declare module 'vue' {
     AgentsPage: typeof import('./views/AgentsPage.vue')['default']
     AIConsole: typeof import('./components/AIConsole.vue')['default']
     FlowEditorPage: typeof import('./views/FlowEditorPage.vue')['default']
+    FlowExecutionCard: typeof import('./components/FlowExecutionCard.vue')['default']
     OnboardOverlay: typeof import('./components/OnboardOverlay.vue')['default']
     OnboardWizardOverlay: typeof import('./components/OnboardWizardOverlay.vue')['default']
     OpenclawPage: typeof import('./views/OpenclawPage.vue')['default']

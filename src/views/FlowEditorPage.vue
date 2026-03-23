@@ -240,6 +240,54 @@ function buildNodePrompt(
   return parts.join('\n\n')
 }
 
+/**
+ * 将 flow 分解为"并行分支"和"汇聚区"：
+ * - branches: 每条从 start 出发的独立链路（停在汇聚节点之前）
+ * - convergeIds: 汇聚节点及其后续节点（按执行顺序）
+ */
+function computeBranchLayout(
+  flow: AgentFlow,
+  levels: FlowNode[][],
+): { branches: string[][]; convergeIds: string[] } {
+  const agentNodes = flow.nodes.filter(n => n.type === 'agent')
+  const agentIds = new Set(agentNodes.map(n => n.id))
+
+  const agentInDeg = new Map<string, number>()
+  const agentSucc = new Map<string, string[]>()
+  for (const n of agentNodes) { agentInDeg.set(n.id, 0); agentSucc.set(n.id, []) }
+  for (const e of flow.edges) {
+    if (agentIds.has(e.target) && agentIds.has(e.source)) {
+      agentInDeg.set(e.target, (agentInDeg.get(e.target) ?? 0) + 1)
+      agentSucc.get(e.source)?.push(e.target)
+    }
+  }
+
+  const isConverge = (id: string) => (agentInDeg.get(id) ?? 0) > 1
+
+  // 从每个"无 agent 前驱"节点出发，顺着链路走，遇到汇聚节点就停
+  const roots = agentNodes.filter(n => agentInDeg.get(n.id) === 0)
+  const branches: string[][] = roots.map(root => {
+    const path = [root.id]
+    let cur = root.id
+    while (true) {
+      const nexts = (agentSucc.get(cur) ?? []).filter(id => !isConverge(id))
+      if (nexts.length !== 1) break
+      path.push(nexts[0])
+      cur = nexts[0]
+    }
+    return path
+  })
+
+  // 汇聚区：所有不在分支中的 agent 节点，按执行层次序
+  const branchSet = new Set(branches.flat())
+  const convergeIds = levels.flat()
+    .map(n => n.id)
+    .filter(id => !branchSet.has(id))
+    .filter((id, i, arr) => arr.indexOf(id) === i)
+
+  return { branches, convergeIds }
+}
+
 async function startRun() {
   if (!editingFlow.value || !initialTask.value.trim()) return
   const flow = editingFlow.value
@@ -267,11 +315,13 @@ async function startRun() {
   ocStore.suppressStream = true
 
   // 创建执行状态，推入一条 flow 类型消息（渲染为卡片）
+  const { branches, convergeIds } = computeBranchLayout(flow, levels)
   const execId = ocStore.createFlowExecution(
     flow.name,
     initialTask.value,
-    levels.map(lvl => lvl.map(n => ({ id: n.id, label: n.label }))),
-    flow.edges.map(e => ({ source: e.source, target: e.target })),
+    levels.flat().map(n => ({ id: n.id, label: n.label })),
+    branches,
+    convergeIds,
   )
   ocStore.messages.push({ type: 'flow', text: '', streaming: false, executionId: execId })
 

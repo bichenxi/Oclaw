@@ -323,7 +323,7 @@ declare global {
   export type { StepStatus, InstallStep } from './stores/installer'
   import('./stores/installer')
   // @ts-ignore
-  export type { MessageType, Message } from './stores/openclaw'
+  export type { MessageType, Message, FlowNodeState, FlowExecutionState } from './stores/openclaw'
   import('./stores/openclaw')
   // @ts-ignore
   export type { ProfileName } from './stores/profile'
