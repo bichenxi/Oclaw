@@ -87,7 +87,7 @@ export function useRunFlow() {
     const token = settings.bearerToken
 
     if (!token) throw new Error('未配置 Bearer Token')
-    if (levels.length === 0) throw new Error('工作流没有 Agent 节点')
+    if (levels.length === 0) throw new Error('团队方案中没有 Agent 节点')
 
     const { branches, convergeIds } = computeBranchLayout(flow, levels)
     const execId = ocStore.createFlowExecution(

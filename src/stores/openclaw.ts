@@ -13,7 +13,7 @@ export interface Message {
 export interface FlowNodeState {
   id: string
   label: string
-  /** 编排时填写的本节点在流程中的职责（展示用） */
+  /** 编排时填写的本节点在团队方案中的职责（展示用） */
   flow_role?: string
   status: 'pending' | 'running' | 'completed' | 'failed'
   output: string

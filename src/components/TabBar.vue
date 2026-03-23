@@ -109,19 +109,19 @@ const disabledItem = computed(() =>
       <span class="overflow-hidden text-ellipsis whitespace-nowrap leading-none">智能体</span>
     </div>
 
-    <!-- Flow 编排按钮 -->
+    <!-- 编排智能体团队 -->
     <div
-      class="tab-item flex items-center gap-[5px] px-3 min-w-auto rounded-t-lg cursor-pointer transition text-[#8a80a7] text-[13px] whitespace-nowrap relative mt-1.5"
+      class="tab-item flex items-center gap-[5px] px-2.5 min-w-auto max-w-[9.5rem] rounded-t-lg cursor-pointer transition text-[#8a80a7] text-[12px] whitespace-nowrap relative mt-1.5"
       :class="[disabledItem, store.specialView === 'flow-editor'
         ? 'bg-secondary/10 text-secondary'
         : 'hover:bg-secondary/6 hover:text-secondary']"
       @click="store.switchToSpecialView('flow-editor')"
     >
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
         <circle cx="5" cy="12" r="2" /><circle cx="19" cy="5" r="2" /><circle cx="19" cy="19" r="2" />
         <line x1="7" y1="12" x2="17" y2="6" /><line x1="7" y1="12" x2="17" y2="18" />
       </svg>
-      <span class="overflow-hidden text-ellipsis whitespace-nowrap leading-none">Flow</span>
+      <span class="overflow-hidden text-ellipsis whitespace-nowrap leading-none">编排智能体团队</span>
     </div>
 
     <!-- 设置按钮 -->

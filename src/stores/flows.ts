@@ -29,7 +29,7 @@ export const useFlowsStore = defineStore('flows', () => {
   function newFlow(): AgentFlow {
     return {
       id: '',
-      name: '新工作流',
+      name: '新团队方案',
       description: '',
       nodes: [
         { id: 'start', type: 'start', label: '开始', position: { x: 100, y: 200 } },

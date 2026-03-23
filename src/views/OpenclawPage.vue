@@ -134,7 +134,7 @@ function handleKeydown(e: KeyboardEvent) {
 const hasToken = computed(() => !!settings.bearerToken)
 const isSending = computed(() => tempMode.value ? tempSending.value : sending.value)
 
-// ── Flow 触发（与主输入框共用任务文案，避免二次输入）──────────────────────────
+// ── 团队方案运行（与主输入框共用任务文案，避免二次输入）──────────────────────────
 const { runFlow } = useRunFlow()
 const flows = ref<AgentFlow[]>([])
 const selectedFlow = ref<AgentFlow | null>(null)
@@ -324,7 +324,7 @@ watch(tempMode, (v) => {
           <p class="text-[12px] text-[#9b8ec4] m-0 text-center">支持自然语言指令，如「帮我搜索小红书上的旅游攻略」</p>
         </div>
         <div v-for="(msg, i) in messages" :key="i" class="flex flex-col w-full" :class="msg.type === 'user' ? 'items-end' : 'items-start'">
-          <!-- 工作流执行卡片 -->
+          <!-- 团队方案执行卡片 -->
           <template v-if="msg.type === 'flow'">
             <FlowExecutionCard :execution-id="msg.executionId!" />
           </template>
@@ -410,7 +410,7 @@ watch(tempMode, (v) => {
         v-model="inputText"
         class="w-full px-3.5 py-2.5 text-[14px] font-[inherit] border-[1.5px] border-[#e8e2f4] rounded-[10px] resize-none outline-none box-border text-[#1f1f2e] leading-[1.5] transition placeholder-[#b8b0cc] focus:border-[#7c5cfc] focus:shadow-[0_0_0_3px_rgba(95,71,206,0.08)] disabled:opacity-60 disabled:cursor-not-allowed"
         :placeholder="!tempMode && flows.length
-          ? '输入消息（Enter 发送）；运行工作流时，以上内容将作为任务说明'
+          ? '输入消息（Enter 发送）；运行团队方案时，以上内容将作为任务说明'
           : '输入消息，Enter 发送，Shift+Enter 换行'"
         rows="3"
         :disabled="isSending"
@@ -432,9 +432,9 @@ watch(tempMode, (v) => {
           </p>
         </div>
         <div class="flex items-center gap-2 shrink-0">
-          <!-- 工作流：下拉 + 文案按钮，与对话输入同一套内容 -->
+          <!-- 团队方案：下拉 + 运行，与对话输入同一套内容 -->
           <template v-if="!tempMode">
-            <div class="flex items-center gap-1.5 h-9 pl-2 pr-1 rounded-[10px] border border-[#ece8f5] bg-[#faf8ff]" title="工作流">
+            <div class="flex items-center gap-1.5 h-9 pl-2 pr-1 rounded-[10px] border border-[#ece8f5] bg-[#faf8ff]" title="智能体团队方案">
               <span class="flex items-center shrink-0 text-secondary/75" aria-hidden="true">
                 <!-- 横向三步流水线，易识别、不抢戏 -->
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
@@ -450,10 +450,10 @@ watch(tempMode, (v) => {
                   v-model="selectedFlowId"
                   :disabled="flowRunning || flowsLoading || flows.length === 0"
                   class="appearance-none h-7 max-w-[9.5rem] sm:max-w-[11.5rem] min-w-[5.5rem] pl-1 pr-6 text-[12px] font-medium text-[#4a4568] bg-transparent border-none rounded-md outline-none cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed truncate"
-                  aria-label="选择工作流"
+                  aria-label="选择团队方案"
                 >
                   <option v-if="flows.length === 0" value="" disabled>
-                    {{ flowsLoading ? '加载中…' : '暂无工作流' }}
+                    {{ flowsLoading ? '加载中…' : '暂无团队方案' }}
                   </option>
                   <option
                     v-for="flow in flows"
@@ -474,7 +474,7 @@ watch(tempMode, (v) => {
                   ? 'text-[#c4bdd8] bg-transparent cursor-not-allowed border-transparent'
                   : 'text-secondary bg-white shadow-sm border-secondary/20 hover:bg-secondary/5'"
                 :disabled="flowRunning || !selectedFlow || !inputText.trim() || flows.length === 0"
-                title="用上方输入框中的文字作为任务，执行所选工作流"
+                title="用上方输入框中的文字作为任务，执行所选团队方案"
                 @click="triggerFlow"
               >
                 <span v-if="flowRunning" class="inline-flex items-center gap-1.5">
@@ -487,7 +487,7 @@ watch(tempMode, (v) => {
             <button
               type="button"
               class="w-8 h-8 flex-center rounded-lg text-[#b8b0cc] hover:text-secondary hover:bg-secondary/6 transition border-none bg-transparent cursor-pointer disabled:opacity-35"
-              title="刷新工作流列表"
+              title="刷新团队方案列表"
               :disabled="flowsLoading || flowRunning"
               @click="refreshFlows"
             >

@@ -321,7 +321,7 @@ async function startRun() {
     return
   }
   if (levels.length === 0) {
-    ocStore.messages.push({ type: 'user', text: '⚠️ 工作流没有 Agent 节点', streaming: false })
+    ocStore.messages.push({ type: 'user', text: '⚠️ 团队方案中没有 Agent 节点', streaming: false })
     tabsStore.switchToSpecialView('openclaw')
     return
   }
@@ -444,13 +444,13 @@ async function startRun() {
         </div>
         <div>
           <div class="text-[17px] font-bold text-[#1f1f2e]">
-            <template v-if="showFlowList">Agent Flow 编排</template>
+            <template v-if="showFlowList">编排智能体团队</template>
             <template v-else>
-              <input v-model="flowName" class="text-[17px] font-bold text-[#1f1f2e] bg-transparent border-none outline-none w-[220px]" placeholder="工作流名称" />
+              <input v-model="flowName" class="text-[17px] font-bold text-[#1f1f2e] bg-transparent border-none outline-none w-[220px]" placeholder="团队方案名称" />
             </template>
           </div>
           <div class="text-[12px] text-[#9b8ec4]">
-            {{ showFlowList ? '管理多 Agent 协作工作流' : '点击 Agent 节点，在右侧填写「流程内职责」；拖拽连线编排顺序' }}
+            {{ showFlowList ? '创建与管理多智能体协作团队方案' : '点击 Agent 节点，在右侧填写「团队内职责」；拖拽连线编排顺序' }}
           </div>
         </div>
       </div>
@@ -464,7 +464,7 @@ async function startRun() {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
             </svg>
-            新建工作流
+            新建团队方案
           </button>
         </template>
         <template v-else>
@@ -494,7 +494,7 @@ async function startRun() {
       </div>
     </div>
 
-    <!-- Flow 列表 -->
+    <!-- 团队方案列表 -->
     <div v-if="showFlowList" class="flex-1 overflow-y-auto px-8 py-6">
       <div v-if="flowsStore.loading" class="flex-center h-40">
         <span class="w-7 h-7 border-[2.5px] border-secondary border-t-transparent rounded-full animate-spin" />
@@ -506,9 +506,9 @@ async function startRun() {
             <line x1="7" y1="12" x2="17" y2="6" /><line x1="7" y1="12" x2="17" y2="18" />
           </svg>
         </div>
-        <p class="text-[14px] text-[#9b8ec4] m-0">还没有工作流</p>
+        <p class="text-[14px] text-[#9b8ec4] m-0">还没有团队方案</p>
         <button class="mt-2 px-5 py-2 text-[13px] font-medium rounded-[10px] border border-secondary/30 text-secondary bg-secondary/6 hover:bg-secondary/12 cursor-pointer transition" @click="createNew">
-          创建第一个工作流
+          创建第一个团队方案
         </button>
       </div>
       <div v-else class="grid grid-cols-1 gap-3 max-w-[680px]">
@@ -541,7 +541,7 @@ async function startRun() {
       </div>
     </div>
 
-    <!-- Flow 编辑器 -->
+    <!-- 团队画布 -->
     <div v-else class="flex flex-1 min-h-0">
       <!-- 左侧 Agent 面板 -->
       <div class="w-52 shrink-0 border-r border-[#e8e2f4] bg-white flex flex-col overflow-hidden">
@@ -595,13 +595,13 @@ async function startRun() {
         </VueFlow>
       </div>
 
-      <!-- 选中 Agent：编辑在本工作流中的职责（写入 flow_role，执行时注入提示词） -->
+      <!-- 选中 Agent：编辑在本团队方案中的职责（写入 flow_role，执行时注入提示词） -->
       <div
         v-if="selectedVfNode"
         class="w-[272px] shrink-0 border-l border-[#e8e2f4] bg-white flex flex-col overflow-hidden min-h-0"
       >
         <div class="px-4 py-3 text-[11px] font-semibold text-[#9b8ec4] uppercase tracking-wider border-b border-[#f0ecfa] shrink-0">
-          流程内职责
+          团队内职责
         </div>
         <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-3 min-h-0">
           <div>
@@ -610,7 +610,7 @@ async function startRun() {
               Agent：{{ inspectorAgentWork }}
             </div>
           </div>
-          <label class="text-[11px] font-medium text-[#6b5f8a]">在本工作流中要完成什么</label>
+          <label class="text-[11px] font-medium text-[#6b5f8a]">在本团队方案中要完成什么</label>
           <textarea
             v-model="inspectorFlowRole"
             rows="8"
@@ -618,7 +618,7 @@ async function startRun() {
             placeholder="例如：根据上游调研结果，只输出三种方案的对比表（列：名称、价格、适用场景）；不要替用户做最终决定。"
           />
           <p class="text-[10px] text-[#b8b0cc] leading-relaxed m-0">
-            运行时会作为「本节点在流程中的职责」注入该 Agent；留空则使用通用角色说明。记得点「保存」写入磁盘。
+            运行时会作为「本节点在团队方案中的职责」注入该 Agent；留空则使用通用角色说明。记得点「保存」写入磁盘。
           </p>
         </div>
       </div>
@@ -636,15 +636,15 @@ async function startRun() {
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3" /></svg>
             </div>
             <div>
-              <div class="text-[15px] font-bold text-[#1f1f2e]">运行工作流</div>
-              <div class="text-[11px] text-[#9b8ec4] mt-0.5">结果将在 OpenClaw 对话中展示</div>
+              <div class="text-[15px] font-bold text-[#1f1f2e]">运行团队方案</div>
+              <div class="text-[11px] text-[#9b8ec4] mt-0.5">智能体团队按编排依次执行，结果在 OpenClaw 对话中展示</div>
             </div>
           </div>
 
           <div class="px-6 py-5 flex flex-col gap-4 md:flex-row md:gap-6">
             <!-- 执行计划预览 -->
             <div class="md:w-[48%] flex-1">
-              <div class="text-[11px] font-medium text-[#9b8ec4] mb-2">执行计划</div>
+              <div class="text-[11px] font-medium text-[#9b8ec4] mb-2">团队执行顺序</div>
               <div class="flex flex-wrap gap-1.5 items-center">
                 <template v-for="(lvl, li) in executionLevels" :key="li">
                   <!-- 并行组 -->
@@ -657,18 +657,18 @@ async function startRun() {
                   <!-- 箭头 -->
                   <svg v-if="li < executionLevels.length - 1" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#c4bdd8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
                 </template>
-                <span v-if="executionLevels.length === 0" class="text-[11px] text-[#b8b0cc]">没有 Agent 节点，请先添加</span>
+                <span v-if="executionLevels.length === 0" class="text-[11px] text-[#b8b0cc]">团队方案中还没有 Agent 节点，请先添加</span>
               </div>
             </div>
 
             <!-- 初始任务输入 -->
             <div class="flex-1">
-              <label class="text-[12px] font-medium text-[#6b5f8a] block mb-1.5">初始任务描述</label>
+              <label class="text-[12px] font-medium text-[#6b5f8a] block mb-1.5">团队任务描述</label>
               <textarea
                 v-model="initialTask"
                 rows="4"
                 class="block w-full box-border px-4 py-3 text-[13px] border border-[#e8e2f4] rounded-xl outline-none focus:border-secondary focus:shadow-[0_0_0_3px_rgba(95,71,206,0.08)] resize-none"
-                placeholder="描述你希望 Agent 完成的任务..."
+                placeholder="描述希望整个智能体团队共同完成的总体目标…"
                 @keydown.meta.enter="startRun"
               />
             </div>
@@ -680,7 +680,7 @@ async function startRun() {
               class="px-5 py-2 text-[13px] font-medium text-white rounded-[8px] cursor-pointer transition bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed"
               :disabled="!initialTask.trim() || executionLevels.length === 0"
               @click="startRun"
-            >开始执行</button>
+            >开始运行团队</button>
           </div>
         </div>
       </div>

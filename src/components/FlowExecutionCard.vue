@@ -84,7 +84,7 @@ function nodeSnippet(nodeId: string) {
       <!-- Flow lanes -->
       <section class="flex flex-col gap-6">
         <div class="flex flex-col gap-1">
-          <p class="text-[11px] uppercase tracking-[0.5em] text-[#a391d9]">flow map</p>
+          <p class="text-[11px] uppercase tracking-[0.5em] text-[#a391d9]">团队拓扑</p>
           <h3 class="text-[18px] font-semibold text-[#1b1531]">执行路径</h3>
           <p class="text-[13px] text-[#6b5f8a] leading-relaxed">
             {{ exec.task || '当前执行未附带描述' }}
