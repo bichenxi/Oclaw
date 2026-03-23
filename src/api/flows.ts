@@ -74,7 +74,8 @@ export interface RunFlowNodeParams {
   baseUrl?: string
   token: string
   sessionKey: string
+  model?: string
   input: string
 }
 export const runFlowNode = (params: RunFlowNodeParams) =>
-  invoke<string>('run_flow_node', params)
+  invoke<string>('run_flow_node', params as unknown as Record<string, unknown>)

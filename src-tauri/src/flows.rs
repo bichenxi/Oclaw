@@ -349,6 +349,7 @@ pub async fn run_flow_node(
     base_url: Option<String>,
     token: String,
     session_key: String,
+    model: Option<String>,
     input: String,
 ) -> Result<String, String> {
     use futures_util::StreamExt;
@@ -356,7 +357,12 @@ pub async fn run_flow_node(
     let base = base_url.unwrap_or_else(|| "http://127.0.0.1:18789".to_string());
     let url = format!("{}/v1/responses", base.trim_end_matches('/'));
 
+    let model = model
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| "minimax-cn/MiniMax-M2.5".to_string());
+
     let body = serde_json::json!({
+        "model": model,
         "input": input,
         "stream": true,
     });
