@@ -6,6 +6,26 @@ const props = defineProps<{ executionId: string }>()
 const ocStore = useOpenclawStore()
 const exec = computed(() => ocStore.flowExecutions[props.executionId])
 const hasBranches = computed(() => (exec.value?.branches?.length ?? 0) > 1)
+const branchCount = computed(() => exec.value?.branches.length ?? 0)
+
+const statusStats = computed(() => {
+  const nodes = exec.value?.nodes ?? []
+  const completed = nodes.filter(n => n.status === 'completed').length
+  const runningCount = nodes.filter(n => n.status === 'running').length
+  const failed = nodes.filter(n => n.status === 'failed').length
+  const total = nodes.length
+  const pending = Math.max(total - completed - runningCount - failed, 0)
+  const percent = total > 0 ? Math.round((completed / total) * 100) : 0
+  return { total, completed, running: runningCount, failed, pending, percent }
+})
+
+const formattedElapsed = computed(() => {
+  const sec = elapsed.value
+  const minutes = Math.floor(sec / 60)
+  const seconds = sec % 60
+  if (minutes > 0) return `${minutes}m ${seconds}s`
+  return `${seconds}s`
+})
 
 const elapsed = ref(0)
 let timer: ReturnType<typeof setInterval> | null = null
@@ -13,211 +33,185 @@ onMounted(() => { timer = setInterval(() => elapsed.value++, 1000) })
 onUnmounted(() => { if (timer) clearInterval(timer) })
 watch(() => exec.value?.status, s => { if (s !== 'running' && timer) { clearInterval(timer); timer = null } })
 
-const selectedNode = ref<FlowNodeState | null>(null)
-const copied = ref(false)
+const modalNode = ref<FlowNodeState | null>(null)
+function openModal(nodeId: string) {
+  const n = nodeById(nodeId)
+  if (n) modalNode.value = n
+}
+
+// 弹窗内容跟随节点实时更新
+watch(() => exec.value?.nodes, () => {
+  if (modalNode.value) {
+    modalNode.value = nodeById(modalNode.value.id) ?? null
+  }
+}, { deep: true })
 
 function nodeById(id: string): FlowNodeState | undefined {
   return exec.value?.nodes.find(n => n.id === id)
 }
-function openDetail(id: string) {
-  const n = nodeById(id)
-  if (n) selectedNode.value = n
+
+function statusBadgeClass(status: FlowNodeState['status']) {
+  if (status === 'running') return 'text-cyan-700 bg-cyan-100 border border-cyan-200'
+  if (status === 'completed') return 'text-emerald-700 bg-emerald-100 border border-emerald-200'
+  if (status === 'failed') return 'text-red-600 bg-red-50 border border-red-200'
+  return 'text-[#6b5f8a] bg-[#f3efff] border border-[#e4dcf7]'
 }
-async function copyOutput() {
-  if (!selectedNode.value?.output) return
-  try { await navigator.clipboard.writeText(selectedNode.value.output) } catch {}
-  copied.value = true
-  setTimeout(() => copied.value = false, 1500)
+function statusLabel(status: FlowNodeState['status']) {
+  if (status === 'running') return '运行中'
+  if (status === 'completed') return '完成'
+  if (status === 'failed') return '失败'
+  return '待执行'
+}
+function nodeSnippet(nodeId: string) {
+  const node = nodeById(nodeId)
+  if (!node) return ''
+  if (node.status === 'failed') return node.error ?? '发生错误'
+  if (node.output) {
+    return node.output.length > 140 ? `${node.output.slice(0, 140)}…` : node.output
+  }
+  if (node.status === 'running') return '正在生成输出...'
+  return '等待上游结果'
 }
 
-function statusColor(status: FlowNodeState['status'] | string) {
-  if (status === 'running') return 'text-cyan-400'
-  if (status === 'completed') return 'text-emerald-400'
-  if (status === 'failed') return 'text-red-400'
-  return 'text-[#3d365c]'
-}
 </script>
 
 <template>
-  <div v-if="exec" class="w-full max-w-[560px] rounded-[12px] overflow-hidden border border-[#2a2347] shadow-[0_4px_32px_rgba(0,0,0,0.5)]">
+  <div v-if="exec" class="w-full max-w-[960px] rounded-[24px] overflow-hidden border border-[#dfd3ff] bg-white shadow-[0_35px_90px_rgba(20,5,60,0.18)]">
 
-    <!-- Title bar (macOS style) -->
-    <div class="flex items-center gap-2 px-4 py-2.5 bg-[#17152b] border-b border-[#2a2347]">
-      <div class="flex gap-1.5 shrink-0">
-        <div class="w-2.5 h-2.5 rounded-full bg-[#ff5f57]"/>
-        <div class="w-2.5 h-2.5 rounded-full bg-[#febc2e]"/>
-        <div class="w-2.5 h-2.5 rounded-full bg-[#28c840]"/>
-      </div>
-      <span class="flex-1 text-center text-[11px] font-mono text-[#6b5aad] truncate">{{ exec.flowName }}</span>
-      <span
-        class="shrink-0 text-[10px] font-mono"
-        :class="{
-          'text-cyan-400': exec.status === 'running',
-          'text-emerald-400': exec.status === 'completed',
-          'text-red-400': exec.status === 'failed',
-        }"
-      >{{ exec.status === 'running' ? `running · ${elapsed}s` : exec.status === 'completed' ? 'done' : 'failed' }}</span>
-    </div>
+    <!-- Main grid -->
+    <div class="px-8 py-6 flex flex-col gap-6">
 
-    <!-- Terminal body -->
-    <div class="bg-[#0d0c1a] px-4 pt-3 pb-4 flex flex-col gap-2">
-
-      <!-- Task line -->
-      <div class="flex items-start gap-1.5 mb-1">
-        <span class="font-mono text-[10px] text-[#4a3e7a] shrink-0 mt-[1px]">&gt;</span>
-        <span class="font-mono text-[11px] text-[#4a3e7a] leading-relaxed">{{ exec.task }}</span>
-      </div>
-
-      <!-- Branch columns (parallel) -->
-      <div
-        v-if="hasBranches"
-        class="grid gap-2 items-start"
-        :style="`grid-template-columns: repeat(${exec.branches.length}, 1fr)`"
-      >
-        <div v-for="(branch, bi) in exec.branches" :key="bi" class="flex flex-col gap-1.5">
-          <template v-for="nodeId in branch" :key="nodeId">
-            <div
-              v-if="nodeById(nodeId)"
-              class="flex flex-col gap-1 px-2.5 py-2 rounded-[7px] border border-[#1e1b35] cursor-pointer transition-colors hover:border-[#3a3264] hover:bg-[#13112a]"
-              :class="{ 'border-[#3a3264] bg-[#13112a]': selectedNode?.id === nodeId }"
-              @click="openDetail(nodeId)"
-            >
-              <div class="flex items-center justify-between gap-1">
-                <div class="flex items-center gap-1">
-                  <span class="font-mono text-[10px] text-[#3d365c]">$</span>
-                  <span class="font-mono text-[11px] font-semibold truncate" :class="statusColor(nodeById(nodeId)!.status)">{{ nodeById(nodeId)!.label }}</span>
-                </div>
-                <span class="font-mono text-[9px] uppercase tracking-wider shrink-0" :class="statusColor(nodeById(nodeId)!.status)">
-                  {{ nodeById(nodeId)!.status === 'pending' ? 'idle' : nodeById(nodeId)!.status }}
-                </span>
-              </div>
-              <div class="pl-3 font-mono text-[10px] leading-relaxed min-h-[14px]">
-                <span v-if="nodeById(nodeId)!.status === 'pending'" class="text-[#2e2852]">_</span>
-                <span v-else-if="nodeById(nodeId)!.status === 'failed'" class="text-red-500 line-clamp-2 break-all">{{ nodeById(nodeId)!.error ?? 'error' }}</span>
-                <span v-else class="text-[#5c4e94] line-clamp-2 break-words">
-                  {{ nodeById(nodeId)!.output }}<span v-if="nodeById(nodeId)!.status === 'running'" class="cursor-blink text-cyan-400">█</span>
-                </span>
-              </div>
-            </div>
-          </template>
+      <!-- Flow lanes -->
+      <section class="flex flex-col gap-6">
+        <div class="flex flex-col gap-1">
+          <p class="text-[11px] uppercase tracking-[0.5em] text-[#a391d9]">flow map</p>
+          <h3 class="text-[18px] font-semibold text-[#1b1531]">执行路径</h3>
+          <p class="text-[13px] text-[#6b5f8a] leading-relaxed">
+            {{ exec.task || '当前执行未附带描述' }}
+          </p>
+          <div class="text-[11px] text-[#988fbd] flex items-center gap-3">
+            <span>总计 {{ statusStats.total }} 步</span>
+            <span>并行 {{ hasBranches ? branchCount : 0 }}</span>
+            <span>耗时 {{ formattedElapsed }}</span>
+          </div>
         </div>
-      </div>
 
-      <!-- Single branch (sequential) -->
-      <template v-else-if="exec.branches.length === 1">
-        <template v-for="nodeId in exec.branches[0]" :key="nodeId">
+        <div v-if="exec.branches.length > 0" class="flex gap-3 items-start">
           <div
-            v-if="nodeById(nodeId)"
-            class="flex flex-col gap-1 px-2.5 py-2 rounded-[7px] border border-[#1e1b35] cursor-pointer transition-colors hover:border-[#3a3264] hover:bg-[#13112a]"
-            :class="{ 'border-[#3a3264] bg-[#13112a]': selectedNode?.id === nodeId }"
-            @click="openDetail(nodeId)"
+            v-for="(branch, bi) in exec.branches"
+            :key="bi"
+            class="flex-1 min-w-0 rounded-[22px] border border-[#e6defa] bg-[#fcfbff] px-5 py-4 flex flex-col gap-3"
           >
-            <div class="flex items-center justify-between gap-1">
-              <div class="flex items-center gap-1">
-                <span class="font-mono text-[10px] text-[#3d365c]">$</span>
-                <span class="font-mono text-[11px] font-semibold truncate" :class="statusColor(nodeById(nodeId)!.status)">{{ nodeById(nodeId)!.label }}</span>
+            <div class="flex items-center justify-between text-[#5f47ce] text-[12px] font-semibold">
+              <span>分支 {{ bi + 1 }}</span>
+              <span class="text-[11px] font-mono text-[#9b8ec4]">{{ branch.length }} 步</span>
+            </div>
+            <template v-for="(nodeId, idx) in branch" :key="nodeId">
+              <div
+                v-if="nodeById(nodeId)"
+                class="flex flex-col gap-2 rounded-[18px] border bg-white px-4 py-3 cursor-pointer transition-all hover:border-[#c4b0ff] hover:shadow-[0_2px_8px_rgba(95,71,206,0.08)]"
+                :class="nodeById(nodeId)!.status === 'failed' ? 'ring-1 ring-red-200 border-red-200' : 'border-[#e6defa]'"
+                @click="openModal(nodeId)"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-[11px] font-mono uppercase tracking-[0.25em] text-[#9b8ec4]">第 {{ idx + 1 }} 步</span>
+                  <span class="px-2 py-0.5 text-[10px] font-mono rounded-full" :class="statusBadgeClass(nodeById(nodeId)!.status)">
+                    {{ statusLabel(nodeById(nodeId)!.status) }}
+                  </span>
+                </div>
+                <span class="text-[13px] font-semibold text-[#1f1b2e] truncate">{{ nodeById(nodeId)!.label }}</span>
+                <p v-if="nodeById(nodeId)?.flow_role" class="text-[10px] text-[#8b7fd4] leading-snug line-clamp-2 m-0">
+                  {{ nodeById(nodeId)!.flow_role }}
+                </p>
+                <p class="text-[11px] text-[#6b5f8a] leading-relaxed min-h-[34px]">
+                  {{ nodeSnippet(nodeId) }}
+                  <span v-if="nodeById(nodeId)!.status === 'running'" class="cursor-blink text-[#5f47ce]">█</span>
+                </p>
               </div>
-              <span class="font-mono text-[9px] uppercase tracking-wider shrink-0" :class="statusColor(nodeById(nodeId)!.status)">
-                {{ nodeById(nodeId)!.status === 'pending' ? 'idle' : nodeById(nodeId)!.status }}
-              </span>
-            </div>
-            <div class="pl-3 font-mono text-[10px] leading-relaxed min-h-[14px]">
-              <span v-if="nodeById(nodeId)!.status === 'pending'" class="text-[#2e2852]">_</span>
-              <span v-else-if="nodeById(nodeId)!.status === 'failed'" class="text-red-500 line-clamp-2 break-all">{{ nodeById(nodeId)!.error ?? 'error' }}</span>
-              <span v-else class="text-[#5c4e94] line-clamp-2 break-words">
-                {{ nodeById(nodeId)!.output }}<span v-if="nodeById(nodeId)!.status === 'running'" class="cursor-blink text-cyan-400">█</span>
-              </span>
-            </div>
-          </div>
-        </template>
-      </template>
-
-      <!-- Convergence separator -->
-      <div v-if="hasBranches && exec.convergeIds.length > 0" class="flex items-center gap-2 my-0.5">
-        <div class="flex-1 border-t border-dashed border-[#2a2347]"/>
-        <span class="font-mono text-[8px] uppercase tracking-[0.15em] text-[#3d365c]">converge</span>
-        <div class="flex-1 border-t border-dashed border-[#2a2347]"/>
-      </div>
-
-      <!-- Convergence nodes -->
-      <template v-for="nodeId in exec.convergeIds" :key="nodeId">
-        <div
-          v-if="nodeById(nodeId)"
-          class="flex flex-col gap-1 px-2.5 py-2 rounded-[7px] border border-[#1e1b35] cursor-pointer transition-colors hover:border-[#3a3264] hover:bg-[#13112a]"
-          :class="{ 'border-[#3a3264] bg-[#13112a]': selectedNode?.id === nodeId }"
-          @click="openDetail(nodeId)"
-        >
-          <div class="flex items-center justify-between gap-1">
-            <div class="flex items-center gap-1">
-              <span class="font-mono text-[10px] text-[#3d365c]">$</span>
-              <span class="font-mono text-[11px] font-semibold truncate" :class="statusColor(nodeById(nodeId)!.status)">{{ nodeById(nodeId)!.label }}</span>
-            </div>
-            <span class="font-mono text-[9px] uppercase tracking-wider shrink-0" :class="statusColor(nodeById(nodeId)!.status)">
-              {{ nodeById(nodeId)!.status === 'pending' ? 'idle' : nodeById(nodeId)!.status }}
-            </span>
-          </div>
-          <div class="pl-3 font-mono text-[10px] leading-relaxed min-h-[14px]">
-            <span v-if="nodeById(nodeId)!.status === 'pending'" class="text-[#2e2852]">_</span>
-            <span v-else-if="nodeById(nodeId)!.status === 'failed'" class="text-red-500 line-clamp-2 break-all">{{ nodeById(nodeId)!.error ?? 'error' }}</span>
-            <span v-else class="text-[#5c4e94] line-clamp-2 break-words">
-              {{ nodeById(nodeId)!.output }}<span v-if="nodeById(nodeId)!.status === 'running'" class="cursor-blink text-cyan-400">█</span>
-            </span>
+            </template>
           </div>
         </div>
-      </template>
+        <div v-else class="rounded-[18px] border border-dashed border-[#dfd3ff] bg-[#fbf7ff] px-5 py-10 text-center text-[13px] text-[#9b8ec4]">
+          还没有 agent 节点，先在右侧添加智能体吧。
+        </div>
+
+        <div
+          v-if="exec.convergeIds.length"
+          class="rounded-[22px] border border-[#f2d9b5] bg-[#fffaf2] px-5 py-4 flex flex-col gap-4"
+        >
+          <div class="flex items-center justify-between text-[#b0620b] text-[12px] font-semibold">
+            <span>合流区</span>
+            <span class="text-[11px] font-mono text-[#d19a4b]">{{ exec.convergeIds.length }} 节点</span>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <template v-for="(nodeId, idx) in exec.convergeIds" :key="nodeId">
+              <div
+                v-if="nodeById(nodeId)"
+                class="flex flex-col gap-2 rounded-[18px] border bg-white px-4 py-3 cursor-pointer transition-all hover:border-[#f0b768]/60 hover:shadow-[0_2px_8px_rgba(222,146,28,0.08)]"
+                :class="nodeById(nodeId)!.status === 'failed' ? 'ring-1 ring-red-200 border-red-200' : 'border-[#f7dcb5]'"
+                @click="openModal(nodeId)"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-[11px] font-mono uppercase tracking-[0.25em] text-[#d19a4b]">第 {{ idx + 1 }} 步</span>
+                  <span class="px-2 py-0.5 text-[10px] font-mono rounded-full" :class="statusBadgeClass(nodeById(nodeId)!.status)">
+                    {{ statusLabel(nodeById(nodeId)!.status) }}
+                  </span>
+                </div>
+                <span class="text-[13px] font-semibold text-[#3c2f13] truncate">{{ nodeById(nodeId)!.label }}</span>
+                <p v-if="nodeById(nodeId)?.flow_role" class="text-[10px] text-[#b08a4a] leading-snug line-clamp-2 m-0">
+                  {{ nodeById(nodeId)!.flow_role }}
+                </p>
+                <p class="text-[11px] text-[#7b6841] leading-relaxed min-h-[34px]">
+                  {{ nodeSnippet(nodeId) }}
+                  <span v-if="nodeById(nodeId)!.status === 'running'" class="cursor-blink text-[#b0620b]">█</span>
+                </p>
+              </div>
+            </template>
+          </div>
+        </div>
+      </section>
 
     </div>
-  </div>
 
-  <!-- Detail Modal -->
-  <Teleport to="body">
-    <Transition name="modal-fade">
-      <div v-if="selectedNode" class="fixed inset-0 z-[9999] flex items-center justify-center p-4" @click.self="selectedNode = null">
-        <div class="absolute inset-0 bg-black/60 backdrop-blur-[3px]" @click="selectedNode = null"/>
-        <div class="relative bg-[#0d0c1a] border border-[#2a2347] rounded-[14px] shadow-[0_8px_48px_rgba(0,0,0,0.7)] w-full max-w-[660px] max-h-[78vh] flex flex-col">
-
-          <!-- Modal title bar -->
-          <div class="flex items-center justify-between px-5 py-3 bg-[#17152b] border-b border-[#2a2347] rounded-t-[14px] shrink-0">
-            <div class="flex items-center gap-2">
-              <span class="font-mono text-[10px] text-[#3d365c]">$</span>
-              <span class="font-mono text-[13px] font-semibold text-[#b8a8f0]">{{ selectedNode.label }}</span>
-              <span
-                class="font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded"
-                :class="{
-                  'text-cyan-400 bg-cyan-400/10': selectedNode.status === 'running',
-                  'text-emerald-400 bg-emerald-400/10': selectedNode.status === 'completed',
-                  'text-red-400 bg-red-400/10': selectedNode.status === 'failed',
-                  'text-[#3d365c] bg-[#1a1830]': selectedNode.status === 'pending',
-                }"
-              >{{ selectedNode.status === 'pending' ? 'idle' : selectedNode.status }}</span>
+    <!-- 节点详情 -->
+    <Teleport to="body">
+      <div
+        v-if="modalNode"
+        class="fixed inset-0 z-[9999] flex items-center justify-center"
+        @click.self="modalNode = null"
+      >
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-[2px]" @click="modalNode = null" />
+        <div class="relative w-[640px] max-w-[90vw] max-h-[80vh] flex flex-col rounded-[16px] overflow-hidden border border-[#2a1f4e] shadow-[0_40px_100px_rgba(0,0,0,0.6)]">
+          <!-- title bar -->
+          <div class="shrink-0 flex items-center justify-between px-5 py-3 bg-[#1a1330] border-b border-[#2a1f4e]">
+            <div class="flex items-center gap-3">
+              <div class="flex gap-1.5">
+                <span class="w-3 h-3 rounded-full bg-[#ff5f57] cursor-pointer" @click="modalNode = null" />
+                <span class="w-3 h-3 rounded-full bg-[#febc2e]" />
+                <span class="w-3 h-3 rounded-full bg-[#28c840]" />
+              </div>
+              <span class="font-mono text-[12px] text-[#7c6aa8]">~/node/{{ modalNode.label }}</span>
             </div>
-            <div class="flex items-center gap-2">
-              <button
-                class="font-mono text-[10px] px-2.5 py-1 rounded-[6px] border border-[#2a2347] text-[#6b5aad] hover:text-[#b8a8f0] hover:border-[#6b5aad] transition cursor-pointer"
-                @click="copyOutput"
-              >{{ copied ? 'copied ✓' : 'copy' }}</button>
-              <button class="text-[#3d365c] hover:text-[#b8a8f0] transition cursor-pointer ml-1" @click="selectedNode = null">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
-            </div>
+            <span class="px-2 py-0.5 text-[10px] font-mono rounded-full" :class="statusBadgeClass(modalNode.status)">
+              {{ statusLabel(modalNode.status) }}
+            </span>
           </div>
-
-          <!-- Modal output -->
-          <div class="flex-1 overflow-y-auto px-5 py-4">
-            <pre
-              v-if="selectedNode.output"
-              class="font-mono text-[12px] text-[#8a7ac4] whitespace-pre-wrap leading-[1.7] m-0 break-words"
-            >{{ selectedNode.output }}<span v-if="selectedNode.status === 'running'" class="cursor-blink text-cyan-400">█</span></pre>
-            <div v-else-if="selectedNode.status === 'failed'" class="font-mono text-[12px] text-red-400 leading-relaxed">{{ selectedNode.error ?? 'unknown error' }}</div>
-            <div v-else class="font-mono text-[11px] text-[#3d365c]">waiting for output...</div>
+          <!-- output -->
+          <div class="flex-1 overflow-y-auto bg-[#0d0b18] px-6 py-5">
+            <template v-if="modalNode.output">
+              <pre class="font-mono text-[12px] text-[#c4b0ff] whitespace-pre-wrap leading-[1.8] m-0 break-words">{{ modalNode.output }}<span v-if="modalNode.status === 'running'" class="cursor-blink text-cyan-400">█</span></pre>
+            </template>
+            <template v-else-if="modalNode.status === 'failed'">
+              <pre class="font-mono text-[12px] text-red-400 whitespace-pre-wrap leading-[1.8] m-0 break-words">{{ modalNode.error ?? 'unknown error' }}</pre>
+            </template>
+            <template v-else>
+              <span class="font-mono text-[12px] text-[#4a3e7a]">等待输出...<span class="cursor-blink text-cyan-400">█</span></span>
+            </template>
           </div>
-
         </div>
       </div>
-    </Transition>
-  </Teleport>
+    </Teleport>
+  </div>
 </template>
 
 <style scoped>
@@ -228,12 +222,4 @@ function statusColor(status: FlowNodeState['status'] | string) {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
 }
-.modal-fade-enter-active,
-.modal-fade-leave-active { transition: opacity 0.15s ease; }
-.modal-fade-enter-active .relative,
-.modal-fade-leave-active .relative { transition: transform 0.15s ease, opacity 0.15s ease; }
-.modal-fade-enter-from,
-.modal-fade-leave-to { opacity: 0; }
-.modal-fade-enter-from .relative { transform: scale(0.96) translateY(12px); opacity: 0; }
-.modal-fade-leave-to .relative { transform: scale(0.96) translateY(12px); opacity: 0; }
 </style>

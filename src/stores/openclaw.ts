@@ -13,6 +13,8 @@ export interface Message {
 export interface FlowNodeState {
   id: string
   label: string
+  /** 编排时填写的本节点在流程中的职责（展示用） */
+  flow_role?: string
   status: 'pending' | 'running' | 'completed' | 'failed'
   output: string
   error?: string
@@ -74,7 +76,7 @@ export const useOpenclawStore = defineStore('openclaw', () => {
   function createFlowExecution(
     flowName: string,
     task: string,
-    allNodes: { id: string; label: string }[],
+    allNodes: { id: string; label: string; flow_role?: string }[],
     branches: string[][],
     convergeIds: string[],
   ): string {
@@ -84,7 +86,13 @@ export const useOpenclawStore = defineStore('openclaw', () => {
       flowName,
       task,
       status: 'running',
-      nodes: allNodes.map(n => ({ id: n.id, label: n.label, status: 'pending', output: '' })),
+      nodes: allNodes.map(n => ({
+        id: n.id,
+        label: n.label,
+        flow_role: n.flow_role?.trim() || undefined,
+        status: 'pending',
+        output: '',
+      })),
       branches,
       convergeIds,
     }

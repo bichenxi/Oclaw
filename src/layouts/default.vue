@@ -45,7 +45,7 @@ const store = useTabsStore()
         <!-- 侧边栏面板 -->
         <div
           v-if="store.sidebarOpen"
-          class="absolute right-9 top-0 bottom-0 w-[300px] border-l border-[#e8e2f4] shadow-[-4px_0_16px_rgba(95,71,206,0.08)] bg-white z-40 overflow-hidden"
+          class="absolute right-9 top-0 bottom-0 w-[360px] xl:w-[420px] border-l border-[#e8e2f4] shadow-[-4px_0_16px_rgba(95,71,206,0.08)] bg-white z-40 overflow-hidden"
         >
           <OpenclawPage />
         </div>

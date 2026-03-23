@@ -9,6 +9,8 @@ export interface FlowNode {
   id: string
   type: 'agent' | 'start' | 'end'
   agent_work?: string
+  /** 该 Agent 在本工作流中的职责说明，执行时会注入提示词 */
+  flow_role?: string
   label: string
   position: NodePosition
 }

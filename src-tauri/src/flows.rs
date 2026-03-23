@@ -17,6 +17,9 @@ pub struct FlowNode {
     #[serde(rename = "type")]
     pub node_type: String, // "agent" | "start" | "end"
     pub agent_work: Option<String>,
+    /// 该 Agent 在本工作流中的职责（执行时注入模型提示词）
+    #[serde(default)]
+    pub flow_role: Option<String>,
     pub label: String,
     pub position: NodePosition,
 }

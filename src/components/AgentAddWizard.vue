@@ -354,7 +354,7 @@ function handleDone() {
                   :disabled="starting"
                   @click="handleStart"
                 >
-                  {{ starting ? '启动中…' : '开始添加' }}
+                  {{ starting ? '启动中…' : '开始配置' }}
                 </button>
               </div>
             </template>
@@ -464,7 +464,7 @@ function handleDone() {
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12" /></svg>切换
                   </button>
                   <div class="flex-1" />
-                  <button type="button" :disabled="sending" class="px-5 py-1.5 text-[12px] font-medium text-white rounded-lg cursor-pointer transition bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] shadow-[0_2px_6px_rgba(95,71,206,0.18)] active:scale-95 disabled:opacity-40" @click="sendSubmit()">确认</button>
+                  <button type="button" :disabled="sending" class="px-5 py-1.5 text-[12px] font-medium text-white rounded-lg cursor-pointer transition bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] shadow-[0_2px_6px_rgba(95,71,206,0.18)] active:scale-95 disabled:opacity-40" @click="sendSubmit()">提交选择</button>
                 </div>
               </div>
 
@@ -478,7 +478,7 @@ function handleDone() {
                 <input
                   v-model="store.wizardInputValue"
                   :type="store.wizardPrompt.prompt_type === 'password' ? 'password' : 'text'"
-                  class="w-full px-4 py-3 text-[13px] border border-[#e8e2f4] rounded-xl outline-none focus:border-secondary focus:shadow-[0_0_0_3px_rgba(95,71,206,0.08)]"
+                  class="w-full box-border px-4 py-3 text-[13px] border border-[#e8e2f4] rounded-xl outline-none focus:border-secondary focus:shadow-[0_0_0_3px_rgba(95,71,206,0.08)]"
                   placeholder="请输入…"
                   autocomplete="off"
                   @keyup.enter="answerInput()"
@@ -489,7 +489,7 @@ function handleDone() {
                   :disabled="!store.wizardInputValue.trim() && !store.wizardPrompt?.current_value"
                   @click="answerInput()"
                 >
-                  确认
+                  下一步
                 </button>
               </div>
 
@@ -551,7 +551,7 @@ function handleDone() {
               class="flex items-center gap-2 px-5 py-2 text-[13px] font-medium text-white rounded-[8px] cursor-pointer transition bg-[linear-gradient(135deg,#22c55e_0%,#16a34a_100%)] shadow-[0_2px_8px_rgba(34,197,94,0.2)]"
               @click="handleDone()"
             >
-              完成
+              关闭
             </button>
             <button
               v-else-if="store.wizardError && !store.wizardRunning"
@@ -559,7 +559,7 @@ function handleDone() {
               class="px-5 py-2 text-[13px] font-medium rounded-[8px] cursor-pointer transition border border-secondary/30 text-secondary bg-secondary/6 hover:bg-secondary/12"
               @click="handleStart()"
             >
-              重试
+              重新配置
             </button>
           </div>
         </div>

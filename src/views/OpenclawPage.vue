@@ -11,6 +11,8 @@ import {
   openclawSendCompletions,
   type OpenclawV1Params,
 } from '@/api/openclaw'
+import { listFlows, type AgentFlow } from '@/api/flows'
+import { useRunFlow } from '@/composables/useRunFlow'
 
 const store = useTabsStore()
 const settings = useSettingsStore()
@@ -132,10 +134,58 @@ function handleKeydown(e: KeyboardEvent) {
 const hasToken = computed(() => !!settings.bearerToken)
 const isSending = computed(() => tempMode.value ? tempSending.value : sending.value)
 
+// ── Flow 触发（与主输入框共用任务文案，避免二次输入）──────────────────────────
+const { runFlow } = useRunFlow()
+const flows = ref<AgentFlow[]>([])
+const selectedFlow = ref<AgentFlow | null>(null)
+const flowRunning = ref(false)
+const flowError = ref('')
+const flowsLoading = ref(false)
+
+const selectedFlowId = computed({
+  get: () => selectedFlow.value?.id ?? '',
+  set: (id: string) => {
+    selectedFlow.value = flows.value.find(f => f.id === id) ?? null
+  },
+})
+
+async function refreshFlows() {
+  flowsLoading.value = true
+  flowError.value = ''
+  try {
+    const list = await listFlows()
+    flows.value = list
+    if (selectedFlow.value && !list.some(f => f.id === selectedFlow.value!.id))
+      selectedFlow.value = list[0] ?? null
+    else if (!selectedFlow.value && list[0])
+      selectedFlow.value = list[0]
+  } catch (e: any) {
+    flowError.value = e?.message ?? String(e)
+  } finally {
+    flowsLoading.value = false
+  }
+}
+
+async function triggerFlow() {
+  const task = inputText.value.trim()
+  if (!selectedFlow.value || !task || flowRunning.value) return
+  flowRunning.value = true
+  flowError.value = ''
+  try {
+    await runFlow(selectedFlow.value, task)
+    inputText.value = ''
+  } catch (e: any) {
+    flowError.value = e?.message ?? String(e)
+  } finally {
+    flowRunning.value = false
+  }
+}
+
 ocStore.startListeners()
 
 onMounted(() => {
   refreshStatus()
+  refreshFlows()
   scrollToBottom()
   const timer = setInterval(refreshStatus, 5000)
 
@@ -163,6 +213,11 @@ onMounted(() => {
 
 watch(messages, scrollToBottom, { deep: true })
 watch(tempMessages, scrollToBottom, { deep: true })
+
+watch(tempMode, (v) => {
+  if (!v)
+    refreshFlows()
+})
 </script>
 
 <template>
@@ -268,19 +323,19 @@ watch(tempMessages, scrollToBottom, { deep: true })
           <p class="text-[14px] text-[#6b7280] m-0">向 OpenClaw 发送消息，开始对话</p>
           <p class="text-[12px] text-[#9b8ec4] m-0 text-center">支持自然语言指令，如「帮我搜索小红书上的旅游攻略」</p>
         </div>
-        <div v-for="(msg, i) in messages" :key="i" class="flex flex-col" :class="msg.type === 'user' ? 'items-end' : 'items-start'">
+        <div v-for="(msg, i) in messages" :key="i" class="flex flex-col w-full" :class="msg.type === 'user' ? 'items-end' : 'items-start'">
           <!-- 工作流执行卡片 -->
           <template v-if="msg.type === 'flow'">
             <FlowExecutionCard :execution-id="msg.executionId!" />
           </template>
           <template v-else-if="msg.type === 'user'">
-            <div class="max-w-[75%] bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] text-white px-3.5 py-2.5 rounded-[16px_16px_4px_16px] shadow-[0_2px_8px_rgba(95,71,206,0.25)]">
+            <div class="max-w-[82%] bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] text-white px-3.5 py-2.5 rounded-[16px_16px_4px_16px] shadow-[0_2px_8px_rgba(95,71,206,0.25)]">
               <span class="text-[13px] leading-[1.6] text-white whitespace-pre-wrap break-words">{{ msg.text }}</span>
             </div>
           </template>
           <template v-else>
             <div
-              class="max-w-[85%] flex flex-col gap-1 bg-white border border-[#e8e2f4] rounded-[4px_16px_16px_16px] px-3.5 py-2.5 shadow-[0_1px_4px_rgba(95,71,206,0.05)]"
+              class="max-w-[86%] flex flex-col gap-1 bg-white border border-[#e8e2f4] rounded-[4px_16px_16px_16px] px-3.5 py-2.5 shadow-[0_1px_4px_rgba(95,71,206,0.05)]"
               :class="msg.type === 'thought' ? 'border-l-[3px] border-l-[#7c5cfc]' : 'border-l-[3px] border-l-[#22c55e]'"
             >
               <span
@@ -293,8 +348,8 @@ watch(tempMessages, scrollToBottom, { deep: true })
             </div>
           </template>
         </div>
-        <div v-if="sending && !messages.some(m => m.streaming)" class="flex flex-col items-start">
-          <div class="max-w-[85%] flex flex-col gap-1 bg-white border border-[#e8e2f4] border-l-[3px] border-l-[#7c5cfc] rounded-[4px_16px_16px_16px] px-3.5 py-2.5 shadow-[0_1px_4px_rgba(95,71,206,0.05)]">
+        <div v-if="sending && !messages.some(m => m.streaming)" class="flex flex-col items-start ">
+          <div class="max-w-[92%] flex flex-col gap-1 bg-white border border-[#e8e2f4] border-l-[3px] border-l-[#7c5cfc] rounded-[4px_16px_16px_16px] px-3.5 py-2.5 shadow-[0_1px_4px_rgba(95,71,206,0.05)]">
             <span class="inline-flex items-center px-2 py-0.5 rounded-[4px] text-[10px] font-semibold tracking-[0.5px] uppercase self-start bg-secondary/10 text-secondary">思考中</span>
             <span class="oc-typing flex gap-1 py-1"><span /><span /><span /></span>
           </div>
@@ -312,14 +367,14 @@ watch(tempMessages, scrollToBottom, { deep: true })
           <p class="text-[14px] text-[#6b7280] m-0">临时会话</p>
           <p class="text-[12px] text-[#9b8ec4] m-0 text-center leading-relaxed">直接调用模型，每条消息独立发送<br />不携带历史上下文，节省 token</p>
         </div>
-        <div v-for="(msg, i) in tempMessages" :key="i" class="flex flex-col" :class="msg.role === 'user' ? 'items-end' : 'items-start'">
+        <div v-for="(msg, i) in tempMessages" :key="i" class="flex flex-col w-full" :class="msg.role === 'user' ? 'items-end' : 'items-start'">
           <template v-if="msg.role === 'user'">
-            <div class="max-w-[75%] bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] text-white px-3.5 py-2.5 rounded-[16px_16px_4px_16px] shadow-[0_2px_8px_rgba(95,71,206,0.25)]">
+            <div class="max-w-[82%] bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] text-white px-3.5 py-2.5 rounded-[16px_16px_4px_16px] shadow-[0_2px_8px_rgba(95,71,206,0.25)]">
               <span class="text-[13px] leading-[1.6] whitespace-pre-wrap break-words">{{ msg.content }}</span>
             </div>
           </template>
           <template v-else>
-            <div class="max-w-[85%] bg-white border border-[#e8e2f4] border-l-[3px] border-l-secondary/50 rounded-[4px_16px_16px_16px] px-3.5 py-2.5 shadow-[0_1px_4px_rgba(95,71,206,0.05)]">
+            <div class="max-w-[92%] bg-white border border-[#e8e2f4] border-l-[3px] border-l-secondary/50 rounded-[4px_16px_16px_16px] px-3.5 py-2.5 shadow-[0_1px_4px_rgba(95,71,206,0.05)]">
               <span class="text-[13px] leading-[1.6] text-[#1f1f2e] whitespace-pre-wrap break-words">
                 {{ msg.content }}<span v-if="msg.streaming" class="oc-cursor" />
               </span>
@@ -327,7 +382,7 @@ watch(tempMessages, scrollToBottom, { deep: true })
           </template>
         </div>
         <div v-if="tempSending && !tempMessages.some(m => m.role === 'assistant' && m.streaming)" class="flex flex-col items-start">
-          <div class="max-w-[85%] flex flex-col gap-1 bg-white border border-[#e8e2f4] border-l-[3px] border-l-secondary/50 rounded-[4px_16px_16px_16px] px-3.5 py-2.5">
+          <div class="max-w-[92%] flex flex-col gap-1 bg-white border border-[#e8e2f4] border-l-[3px] border-l-secondary/50 rounded-[4px_16px_16px_16px] px-3.5 py-2.5">
             <span class="oc-typing flex gap-1 py-1"><span /><span /><span /></span>
           </div>
         </div>
@@ -354,33 +409,117 @@ watch(tempMessages, scrollToBottom, { deep: true })
       <textarea
         v-model="inputText"
         class="w-full px-3.5 py-2.5 text-[14px] font-[inherit] border-[1.5px] border-[#e8e2f4] rounded-[10px] resize-none outline-none box-border text-[#1f1f2e] leading-[1.5] transition placeholder-[#b8b0cc] focus:border-[#7c5cfc] focus:shadow-[0_0_0_3px_rgba(95,71,206,0.08)] disabled:opacity-60 disabled:cursor-not-allowed"
-        placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+        :placeholder="!tempMode && flows.length
+          ? '输入消息（Enter 发送）；运行工作流时，以上内容将作为任务说明'
+          : '输入消息，Enter 发送，Shift+Enter 换行'"
         rows="3"
         :disabled="isSending"
         @keydown="handleKeydown"
       />
-      <div class="flex items-center justify-between mt-2">
-        <span
-          v-if="!tempMode && settings.sessionKey"
-          class="text-[11px] text-[#b8b0cc] max-w-[200px] overflow-hidden text-ellipsis whitespace-nowrap"
-        >
-          会话：{{ settings.sessionKey }}
-        </span>
-        <span v-else />
-        <button
-          type="button"
-          class="flex items-center gap-1.5 px-[18px] py-2 bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] text-white border-none rounded-[8px] text-[13px] font-medium cursor-pointer transition shadow-[0_2px_8px_rgba(95,71,206,0.25)] hover:not-disabled:shadow-[0_4px_14px_rgba(95,71,206,0.35)] hover:not-disabled:-translate-y-px active:not-disabled:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0 disabled:shadow-none"
-          :disabled="isSending || !inputText.trim()"
-          @click="tempMode ? sendTemp() : send()"
-        >
-          <svg v-if="!isSending" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="22" y1="2" x2="11" y2="13" />
-            <polygon points="22 2 15 22 11 13 2 9 22 2" />
-          </svg>
-          <span v-else class="send-loading" />
-          {{ isSending ? '发送中' : '发送' }}
-        </button>
+      <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 mt-2">
+        <div class="flex items-center gap-2 min-w-0 flex-1">
+          <span
+            v-if="!tempMode && settings.sessionKey"
+            class="text-[11px] text-[#b8b0cc] max-w-[200px] overflow-hidden text-ellipsis whitespace-nowrap"
+          >
+            会话：{{ settings.sessionKey }}
+          </span>
+          <p
+            v-if="!tempMode && flows.length && !settings.sessionKey"
+            class="text-[10px] text-[#c4bdd8] m-0 leading-tight"
+          >
+            「运行」使用上方输入作为任务
+          </p>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <!-- 工作流：下拉 + 文案按钮，与对话输入同一套内容 -->
+          <template v-if="!tempMode">
+            <div class="flex items-center gap-1.5 h-9 pl-2 pr-1 rounded-[10px] border border-[#ece8f5] bg-[#faf8ff]" title="工作流">
+              <span class="flex items-center shrink-0 text-secondary/75" aria-hidden="true">
+                <!-- 横向三步流水线，易识别、不抢戏 -->
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="1.5" y="8.5" width="5" height="7" rx="1.1" />
+                  <path d="M6.5 12h2" />
+                  <rect x="9.5" y="8.5" width="5" height="7" rx="1.1" />
+                  <path d="M14.5 12h2" />
+                  <rect x="17.5" y="8.5" width="5" height="7" rx="1.1" />
+                </svg>
+              </span>
+              <div class="relative flex items-center">
+                <select
+                  v-model="selectedFlowId"
+                  :disabled="flowRunning || flowsLoading || flows.length === 0"
+                  class="appearance-none h-7 max-w-[9.5rem] sm:max-w-[11.5rem] min-w-[5.5rem] pl-1 pr-6 text-[12px] font-medium text-[#4a4568] bg-transparent border-none rounded-md outline-none cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed truncate"
+                  aria-label="选择工作流"
+                >
+                  <option v-if="flows.length === 0" value="" disabled>
+                    {{ flowsLoading ? '加载中…' : '暂无工作流' }}
+                  </option>
+                  <option
+                    v-for="flow in flows"
+                    :key="flow.id"
+                    :value="flow.id"
+                  >
+                    {{ flow.name }}
+                  </option>
+                </select>
+                <svg class="pointer-events-none absolute right-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#b8b0cc]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </div>
+              <button
+                type="button"
+                class="h-7 px-2.5 rounded-lg text-[12px] font-medium cursor-pointer transition whitespace-nowrap border"
+                :class="flowRunning || !selectedFlow || !inputText.trim()
+                  ? 'text-[#c4bdd8] bg-transparent cursor-not-allowed border-transparent'
+                  : 'text-secondary bg-white shadow-sm border-secondary/20 hover:bg-secondary/5'"
+                :disabled="flowRunning || !selectedFlow || !inputText.trim() || flows.length === 0"
+                title="用上方输入框中的文字作为任务，执行所选工作流"
+                @click="triggerFlow"
+              >
+                <span v-if="flowRunning" class="inline-flex items-center gap-1.5">
+                  <span class="inline-block w-3 h-3 rounded-full border-2 border-secondary/25 border-t-secondary animate-spin" />
+                  执行中
+                </span>
+                <span v-else>运行</span>
+              </button>
+            </div>
+            <button
+              type="button"
+              class="w-8 h-8 flex-center rounded-lg text-[#b8b0cc] hover:text-secondary hover:bg-secondary/6 transition border-none bg-transparent cursor-pointer disabled:opacity-35"
+              title="刷新工作流列表"
+              :disabled="flowsLoading || flowRunning"
+              @click="refreshFlows"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" :class="flowsLoading ? 'animate-spin' : ''" aria-hidden="true">
+                <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+                <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                <path d="M16 16h5v5" />
+              </svg>
+            </button>
+          </template>
+          <button
+            type="button"
+            class="flex items-center gap-1.5 px-[18px] py-2 bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] text-white border-none rounded-[8px] text-[13px] font-medium cursor-pointer transition shadow-[0_2px_8px_rgba(95,71,206,0.25)] hover:not-disabled:shadow-[0_4px_14px_rgba(95,71,206,0.35)] hover:not-disabled:-translate-y-px active:not-disabled:translate-y-0 disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0 disabled:shadow-none"
+            :disabled="isSending || !inputText.trim()"
+            @click="tempMode ? sendTemp() : send()"
+          >
+            <svg v-if="!isSending" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13" />
+              <polygon points="22 2 15 22 11 13 2 9 22 2" />
+            </svg>
+            <span v-else class="send-loading" />
+            {{ isSending ? '发送中' : '发送' }}
+          </button>
+        </div>
       </div>
+      <p
+        v-if="!tempMode && flowError"
+        class="text-[11px] text-red-600 m-0 mt-1.5 leading-snug"
+      >
+        {{ flowError }}
+      </p>
     </div>
   </div>
 </template>

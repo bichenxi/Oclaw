@@ -9,6 +9,7 @@ import { useOpenclawStore } from '@/stores/openclaw'
 import { listAgents, type AgentInfo } from '@/api/agents'
 import { runFlowNode } from '@/api/flows'
 import type { AgentFlow, FlowNode, FlowEdge } from '@/api/flows'
+import { buildFlowNodePrompt } from '@/utils/flowNodePrompt'
 
 import '@vue-flow/core/dist/style.css'
 import '@vue-flow/core/dist/theme-default.css'
@@ -37,8 +38,49 @@ const nodeStatuses = ref<Record<string, 'idle' | 'running' | 'completed' | 'fail
 // VueFlow
 const vfNodes = ref<Node[]>([])
 const vfEdges = ref<Edge[]>([])
+const selectedNodeId = ref<string | null>(null)
+
+const selectedVfNode = computed(() =>
+  vfNodes.value.find(n => n.id === selectedNodeId.value && n.type === 'default') ?? null,
+)
+
+const inspectorAgentWork = computed(() => {
+  const n = selectedVfNode.value
+  if (!n?.data) return '—'
+  const w = (n.data as { agentWork?: string }).agentWork
+  return w ? String(w) : '—'
+})
+
+/** 右侧「流程职责」编辑，写入当前选中 Agent 节点的 data.flow_role */
+const inspectorFlowRole = computed({
+  get() {
+    const n = selectedVfNode.value
+    if (!n) return ''
+    return String((n.data as { flow_role?: string })?.flow_role ?? '')
+  },
+  set(v: string) {
+    const id = selectedNodeId.value
+    if (!id) return
+    const i = vfNodes.value.findIndex(x => x.id === id)
+    if (i < 0) return
+    const n = vfNodes.value[i]!
+    vfNodes.value.splice(i, 1, {
+      ...n,
+      data: { ...n.data, flow_role: v },
+    })
+  },
+})
 
 const { onConnect, addEdges, onNodesChange, onEdgesChange, applyNodeChanges, applyEdgeChanges } = useVueFlow()
+
+function onNodeClick(ev: { node: Node }) {
+  if (ev.node.type === 'default') selectedNodeId.value = ev.node.id
+  else selectedNodeId.value = null
+}
+
+function onPaneClick() {
+  selectedNodeId.value = null
+}
 
 onConnect((conn) => {
   addEdges([{
@@ -60,6 +102,7 @@ onMounted(async () => {
 // ── 列表操作 ───────────────────────────────────────────────────────────────
 
 function openFlow(flow: AgentFlow) {
+  selectedNodeId.value = null
   editingFlow.value = { ...flow }
   flowName.value = flow.name
   nodeStatuses.value = {}
@@ -68,6 +111,7 @@ function openFlow(flow: AgentFlow) {
 }
 
 function createNew() {
+  selectedNodeId.value = null
   const flow = flowsStore.newFlow()
   editingFlow.value = flow
   flowName.value = flow.name
@@ -77,6 +121,7 @@ function createNew() {
 }
 
 function backToList() {
+  selectedNodeId.value = null
   showFlowList.value = true
   editingFlow.value = null
 }
@@ -89,7 +134,7 @@ function syncToVueFlow(flow: AgentFlow) {
     type: n.type === 'agent' ? 'default' : n.type === 'start' ? 'input' : 'output',
     label: n.label,
     position: n.position,
-    data: { agentWork: n.agent_work },
+    data: { agentWork: n.agent_work, flow_role: n.flow_role ?? '' },
     style: nodeStyle(n.type, 'idle'),
   }))
   vfEdges.value = flow.edges.map(e => ({
@@ -124,13 +169,18 @@ function setNodeVisualStatus(nodeId: string, type: string, status: 'idle' | 'run
 }
 
 function collectFlow(): AgentFlow {
-  const nodes: FlowNode[] = vfNodes.value.map(n => ({
-    id: n.id,
-    type: (n.type === 'input' ? 'start' : n.type === 'output' ? 'end' : 'agent') as FlowNode['type'],
-    label: String(n.label ?? ''),
-    agent_work: n.data?.agentWork,
-    position: n.position,
-  }))
+  const nodes: FlowNode[] = vfNodes.value.map((n) => {
+    const type = (n.type === 'input' ? 'start' : n.type === 'output' ? 'end' : 'agent') as FlowNode['type']
+    const flowRoleRaw = (n.data as { flow_role?: string } | undefined)?.flow_role?.trim()
+    return {
+      id: n.id,
+      type,
+      label: String(n.label ?? ''),
+      agent_work: n.data?.agentWork,
+      flow_role: type === 'agent' && flowRoleRaw ? flowRoleRaw : undefined,
+      position: n.position,
+    }
+  })
   const edges: FlowEdge[] = vfEdges.value.map(e => ({
     id: e.id, source: e.source, target: e.target,
   }))
@@ -142,7 +192,7 @@ function addAgentNode(agent: AgentInfo) {
   vfNodes.value = [...vfNodes.value, {
     id, type: 'default', label: agent.name,
     position: { x: 200 + Math.random() * 200, y: 150 + Math.random() * 150 },
-    data: { agentWork: agent.name },
+    data: { agentWork: agent.name, flow_role: '' },
     style: nodeStyle('agent'),
   }]
 }
@@ -210,36 +260,6 @@ const executionLevels = computed(() =>
   editingFlow.value ? getExecutionLevels(editingFlow.value) : []
 )
 
-/** 为节点构建完整 prompt：原始任务 + 自己的角色 + 前驱输出 */
-function buildNodePrompt(
-  node: FlowNode,
-  flow: AgentFlow,
-  outputs: Map<string, string>,
-  initialTask: string,
-): string {
-  const sourceOutputs = flow.edges
-    .filter(e => e.target === node.id)
-    .map(e => {
-      const src = flow.nodes.find(n => n.id === e.source)
-      const out = outputs.get(e.source)
-      return out ? { label: src?.label ?? e.source, text: out } : null
-    })
-    .filter(Boolean) as { label: string; text: string }[]
-
-  const parts: string[] = []
-  parts.push(`【总体任务】\n${initialTask}`)
-  parts.push(`【你的角色】\n你是"${node.label}"，在工作流中负责你的专属环节，请围绕总体任务完成你的部分。`)
-
-  if (sourceOutputs.length === 1) {
-    parts.push(`【上游输出（来自「${sourceOutputs[0].label}」）】\n${sourceOutputs[0].text}`)
-  } else if (sourceOutputs.length > 1) {
-    const combined = sourceOutputs.map(s => `— 来自「${s.label}」：\n${s.text}`).join('\n\n')
-    parts.push(`【上游输出】\n${combined}`)
-  }
-
-  return parts.join('\n\n')
-}
-
 /**
  * 将 flow 分解为"并行分支"和"汇聚区"：
  * - branches: 每条从 start 出发的独立链路（停在汇聚节点之前）
@@ -290,7 +310,8 @@ function computeBranchLayout(
 
 async function startRun() {
   if (!editingFlow.value || !initialTask.value.trim()) return
-  const flow = editingFlow.value
+  // 使用画布当前状态（含未保存的职责文案），避免与磁盘快照不一致
+  const flow = collectFlow()
   const levels = getExecutionLevels(flow)
   const token = settingsStore.bearerToken
 
@@ -319,7 +340,7 @@ async function startRun() {
   const execId = ocStore.createFlowExecution(
     flow.name,
     initialTask.value,
-    levels.flat().map(n => ({ id: n.id, label: n.label })),
+    levels.flat().map(n => ({ id: n.id, label: n.label, flow_role: n.flow_role })),
     branches,
     convergeIds,
   )
@@ -334,7 +355,7 @@ async function startRun() {
     if (levelNodes.length === 1) {
       // ── 串行单节点 ──
       const node = levelNodes[0]
-      const input = buildNodePrompt(node, flow, nodeOutputs, initialTask.value)
+      const input = buildFlowNodePrompt(node, flow, nodeOutputs, initialTask.value)
       setNodeVisualStatus(node.id, 'agent', 'running')
       ocStore.updateFlowNode(execId, node.id, { status: 'running' })
 
@@ -370,7 +391,7 @@ async function startRun() {
             token,
             nodeId: node.id,
             sessionKey: `agent:${node.agent_work}:${node.agent_work}`,
-            input: buildNodePrompt(node, flow, nodeOutputs, initialTask.value),
+            input: buildFlowNodePrompt(node, flow, nodeOutputs, initialTask.value),
             ...baseUrlOpt,
           })
         )
@@ -429,7 +450,7 @@ async function startRun() {
             </template>
           </div>
           <div class="text-[12px] text-[#9b8ec4]">
-            {{ showFlowList ? '管理多 Agent 协作工作流' : '拖拽连接 Agent 节点，构建协作流程' }}
+            {{ showFlowList ? '管理多 Agent 协作工作流' : '点击 Agent 节点，在右侧填写「流程内职责」；拖拽连线编排顺序' }}
           </div>
         </div>
       </div>
@@ -560,16 +581,46 @@ async function startRun() {
       </div>
 
       <!-- VueFlow 画布 -->
-      <div class="flex-1 min-w-0">
+      <div class="flex-1 min-w-0 min-h-0">
         <VueFlow
           v-model:nodes="vfNodes"
           v-model:edges="vfEdges"
           fit-view-on-init
           :default-edge-options="{ animated: true, style: { stroke: '#7c5cfc' } }"
+          @node-click="onNodeClick"
+          @pane-click="onPaneClick"
         >
           <Background pattern-color="#e8e2f4" :gap="20" />
           <Controls />
         </VueFlow>
+      </div>
+
+      <!-- 选中 Agent：编辑在本工作流中的职责（写入 flow_role，执行时注入提示词） -->
+      <div
+        v-if="selectedVfNode"
+        class="w-[272px] shrink-0 border-l border-[#e8e2f4] bg-white flex flex-col overflow-hidden min-h-0"
+      >
+        <div class="px-4 py-3 text-[11px] font-semibold text-[#9b8ec4] uppercase tracking-wider border-b border-[#f0ecfa] shrink-0">
+          流程内职责
+        </div>
+        <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-3 min-h-0">
+          <div>
+            <div class="text-[13px] font-semibold text-[#1f1f2e]">{{ selectedVfNode.label }}</div>
+            <div class="text-[11px] text-[#9b8ec4] mt-0.5">
+              Agent：{{ inspectorAgentWork }}
+            </div>
+          </div>
+          <label class="text-[11px] font-medium text-[#6b5f8a]">在本工作流中要完成什么</label>
+          <textarea
+            v-model="inspectorFlowRole"
+            rows="8"
+            class="w-full box-border px-3 py-2.5 text-[12px] border border-[#e8e2f4] rounded-[10px] outline-none focus:border-secondary/60 focus:shadow-[0_0_0_2px_rgba(95,71,206,0.06)] resize-none text-[#1f1f2e] leading-relaxed"
+            placeholder="例如：根据上游调研结果，只输出三种方案的对比表（列：名称、价格、适用场景）；不要替用户做最终决定。"
+          />
+          <p class="text-[10px] text-[#b8b0cc] leading-relaxed m-0">
+            运行时会作为「本节点在流程中的职责」注入该 Agent；留空则使用通用角色说明。记得点「保存」写入磁盘。
+          </p>
+        </div>
       </div>
     </div>
   </div>
@@ -579,7 +630,7 @@ async function startRun() {
     <Transition name="overlay">
       <div v-if="runDialogVisible" class="fixed inset-0 z-[9999] flex items-center justify-center" @click.self="runDialogVisible = false">
         <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" />
-        <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-[480px] mx-4 overflow-hidden">
+        <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-[640px] md:max-w-[720px] mx-4 overflow-hidden">
           <div class="flex items-center gap-3 px-6 pt-6 pb-4 border-b border-[#f0ecfa]">
             <div class="w-8 h-8 rounded-[9px] bg-emerald-100 flex-center shrink-0">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3" /></svg>
@@ -590,9 +641,9 @@ async function startRun() {
             </div>
           </div>
 
-          <div class="px-6 py-5 flex flex-col gap-4">
+          <div class="px-6 py-5 flex flex-col gap-4 md:flex-row md:gap-6">
             <!-- 执行计划预览 -->
-            <div>
+            <div class="md:w-[48%] flex-1">
               <div class="text-[11px] font-medium text-[#9b8ec4] mb-2">执行计划</div>
               <div class="flex flex-wrap gap-1.5 items-center">
                 <template v-for="(lvl, li) in executionLevels" :key="li">
@@ -611,7 +662,7 @@ async function startRun() {
             </div>
 
             <!-- 初始任务输入 -->
-            <div>
+            <div class="flex-1">
               <label class="text-[12px] font-medium text-[#6b5f8a] block mb-1.5">初始任务描述</label>
               <textarea
                 v-model="initialTask"
