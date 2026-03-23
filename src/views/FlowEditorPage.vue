@@ -271,6 +271,7 @@ async function startRun() {
     flow.name,
     initialTask.value,
     levels.map(lvl => lvl.map(n => ({ id: n.id, label: n.label }))),
+    flow.edges.map(e => ({ source: e.source, target: e.target })),
   )
   ocStore.messages.push({ type: 'flow', text: '', streaming: false, executionId: execId })
 
