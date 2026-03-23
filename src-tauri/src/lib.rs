@@ -124,6 +124,7 @@ pub fn run() {
             flows::update_node_status,
             flows::append_flow_log,
             flows::finish_flow_execution,
+            flows::run_flow_node,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

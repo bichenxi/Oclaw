@@ -3,7 +3,11 @@ import { VueFlow, useVueFlow, type Node, type Edge } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { useFlowsStore } from '@/stores/flows'
+import { useSettingsStore } from '@/stores/settings'
+import { useTabsStore } from '@/stores/tabs'
+import { useOpenclawStore } from '@/stores/openclaw'
 import { listAgents, type AgentInfo } from '@/api/agents'
+import { runFlowNode } from '@/api/flows'
 import type { AgentFlow, FlowNode, FlowEdge } from '@/api/flows'
 
 import '@vue-flow/core/dist/style.css'
@@ -11,30 +15,40 @@ import '@vue-flow/core/dist/theme-default.css'
 import '@vue-flow/controls/dist/style.css'
 
 const flowsStore = useFlowsStore()
+const settingsStore = useSettingsStore()
+const tabsStore = useTabsStore()
+const ocStore = useOpenclawStore()
 
 const agents = ref<AgentInfo[]>([])
 const showFlowList = ref(true)
 const editingFlow = ref<AgentFlow | null>(null)
 const flowName = ref('')
-const saving = ref(false)
 
-// VueFlow 节点/边（UI 层）
+// 保存状态
+const saveStatus = ref<'idle' | 'ok' | 'err'>('idle')
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+
+// 执行状态
+const runDialogVisible = ref(false)
+const initialTask = ref('')
+const running = ref(false)
+const nodeStatuses = ref<Record<string, 'idle' | 'running' | 'completed' | 'failed'>>({})
+
+// VueFlow
 const vfNodes = ref<Node[]>([])
 const vfEdges = ref<Edge[]>([])
 
 const { onConnect, addEdges, onNodesChange, onEdgesChange, applyNodeChanges, applyEdgeChanges } = useVueFlow()
 
 onConnect((conn) => {
-  const edge: Edge = {
+  addEdges([{
     id: `e-${conn.source}-${conn.target}`,
     source: conn.source,
     target: conn.target,
     animated: true,
     style: { stroke: '#7c5cfc' },
-  }
-  addEdges([edge])
+  } as Edge])
 })
-
 onNodesChange((changes) => applyNodeChanges(changes))
 onEdgesChange((changes) => applyEdgeChanges(changes))
 
@@ -43,11 +57,12 @@ onMounted(async () => {
   agents.value = await listAgents()
 })
 
-// ── 打开 Flow ──────────────────────────────────────────────────────────────
+// ── 列表操作 ───────────────────────────────────────────────────────────────
 
 function openFlow(flow: AgentFlow) {
   editingFlow.value = { ...flow }
   flowName.value = flow.name
+  nodeStatuses.value = {}
   showFlowList.value = false
   syncToVueFlow(flow)
 }
@@ -56,6 +71,7 @@ function createNew() {
   const flow = flowsStore.newFlow()
   editingFlow.value = flow
   flowName.value = flow.name
+  nodeStatuses.value = {}
   showFlowList.value = false
   syncToVueFlow(flow)
 }
@@ -65,7 +81,7 @@ function backToList() {
   editingFlow.value = null
 }
 
-// ── VueFlow ↔ AgentFlow 同步 ───────────────────────────────────────────────
+// ── VueFlow ↔ AgentFlow ────────────────────────────────────────────────────
 
 function syncToVueFlow(flow: AgentFlow) {
   vfNodes.value = flow.nodes.map(n => ({
@@ -74,7 +90,7 @@ function syncToVueFlow(flow: AgentFlow) {
     label: n.label,
     position: n.position,
     data: { agentWork: n.agent_work },
-    style: nodeStyle(n.type),
+    style: nodeStyle(n.type, 'idle'),
   }))
   vfEdges.value = flow.edges.map(e => ({
     id: e.id,
@@ -85,10 +101,26 @@ function syncToVueFlow(flow: AgentFlow) {
   }))
 }
 
-function nodeStyle(type: string) {
-  if (type === 'start') return { background: '#e8f5e9', border: '1.5px solid #66bb6a', borderRadius: '10px' }
-  if (type === 'end') return { background: '#fce4ec', border: '1.5px solid #ef5350', borderRadius: '10px' }
-  return { background: '#f0ecfa', border: '1.5px solid #7c5cfc', borderRadius: '10px', minWidth: '120px' }
+function nodeStyle(type: string, status: string = 'idle') {
+  const bg: Record<string, string> = {
+    running: '#dbeafe', completed: '#dcfce7', failed: '#fee2e2',
+    idle: type === 'start' ? '#e8f5e9' : type === 'end' ? '#fce4ec' : '#f0ecfa',
+  }
+  const border: Record<string, string> = {
+    running: '#3b82f6', completed: '#22c55e', failed: '#ef4444',
+    idle: type === 'start' ? '#66bb6a' : type === 'end' ? '#ef5350' : '#7c5cfc',
+  }
+  return {
+    background: bg[status] ?? bg.idle,
+    border: `1.5px solid ${border[status] ?? border.idle}`,
+    borderRadius: '10px', minWidth: '120px',
+  }
+}
+
+function setNodeVisualStatus(nodeId: string, type: string, status: 'idle' | 'running' | 'completed' | 'failed') {
+  const node = vfNodes.value.find(n => n.id === nodeId)
+  if (node) node.style = nodeStyle(type, status)
+  nodeStatuses.value[nodeId] = status
 }
 
 function collectFlow(): AgentFlow {
@@ -100,21 +132,15 @@ function collectFlow(): AgentFlow {
     position: n.position,
   }))
   const edges: FlowEdge[] = vfEdges.value.map(e => ({
-    id: e.id,
-    source: e.source,
-    target: e.target,
+    id: e.id, source: e.source, target: e.target,
   }))
   return { ...editingFlow.value!, name: flowName.value, nodes, edges }
 }
 
-// ── 添加 Agent 节点 ────────────────────────────────────────────────────────
-
 function addAgentNode(agent: AgentInfo) {
   const id = `agent-${agent.name}-${Date.now()}`
   vfNodes.value = [...vfNodes.value, {
-    id,
-    type: 'default',
-    label: agent.name,
+    id, type: 'default', label: agent.name,
     position: { x: 200 + Math.random() * 200, y: 150 + Math.random() * 150 },
     data: { agentWork: agent.name },
     style: nodeStyle('agent'),
@@ -124,18 +150,115 @@ function addAgentNode(agent: AgentInfo) {
 // ── 保存 ───────────────────────────────────────────────────────────────────
 
 async function save() {
-  saving.value = true
+  if (saveTimer) clearTimeout(saveTimer)
+  saveStatus.value = 'idle'
   try {
-    const flow = collectFlow()
-    const saved = await flowsStore.save(flow)
+    const saved = await flowsStore.save(collectFlow())
     editingFlow.value = saved
-  } finally {
-    saving.value = false
+    saveStatus.value = 'ok'
+  } catch {
+    saveStatus.value = 'err'
   }
+  saveTimer = setTimeout(() => { saveStatus.value = 'idle' }, 2000)
 }
 
-async function removeFlow(flow_id: string) {
-  await flowsStore.remove(flow_id)
+async function removeFlow(flowId: string) {
+  await flowsStore.remove(flowId)
+}
+
+// ── 执行（结果在对话中展示） ────────────────────────────────────────────────
+
+/** 拓扑排序：从 start 出发，BFS 收集 agent 节点 */
+function getExecutionOrder(flow: AgentFlow): FlowNode[] {
+  const nodeMap = new Map(flow.nodes.map(n => [n.id, n]))
+  const startNode = flow.nodes.find(n => n.type === 'start')
+  if (!startNode) return flow.nodes.filter(n => n.type === 'agent')
+
+  const visited = new Set<string>()
+  const order: FlowNode[] = []
+  const queue = [startNode.id]
+  while (queue.length) {
+    const id = queue.shift()!
+    if (visited.has(id)) continue
+    visited.add(id)
+    const node = nodeMap.get(id)
+    if (node?.type === 'agent') order.push(node)
+    flow.edges.filter(e => e.source === id).forEach(e => queue.push(e.target))
+  }
+  return order
+}
+
+async function startRun() {
+  if (!editingFlow.value || !initialTask.value.trim()) return
+  const flow = editingFlow.value
+  const agentNodes = getExecutionOrder(flow)
+  const token = settingsStore.bearerToken
+
+  if (!token) {
+    ocStore.messages.push({ type: 'user', text: '❌ 未配置 Bearer Token，请在设置页面填写', streaming: false })
+    tabsStore.switchToSpecialView('openclaw')
+    return
+  }
+  if (agentNodes.length === 0) {
+    ocStore.messages.push({ type: 'user', text: '⚠️ 工作流没有 Agent 节点', streaming: false })
+    tabsStore.switchToSpecialView('openclaw')
+    return
+  }
+
+  runDialogVisible.value = false
+  running.value = true
+
+  // 切换到对话视图，让结果显示在那里
+  tabsStore.switchToSpecialView('openclaw')
+
+  // 工作流开始标记
+  ocStore.messages.push({
+    type: 'user',
+    text: `🔗 工作流：${flow.name}\n执行顺序：${agentNodes.map(n => n.label).join(' → ')}`,
+    streaming: false,
+  })
+
+  let context = initialTask.value
+
+  for (const node of agentNodes) {
+    const nodeType = flow.nodes.find(n => n.id === node.id)?.type ?? 'agent'
+    setNodeVisualStatus(node.id, nodeType, 'running')
+
+    // 把发给 Agent 的任务显示为用户消息
+    ocStore.messages.push({
+      type: 'user',
+      text: `▶ [${node.label}]\n${context}`,
+      streaming: false,
+    })
+    ocStore.sending = true
+
+    try {
+      // run_flow_node 会发 stream-item/stream-done 事件，响应自然出现在对话里
+      const output = await runFlowNode({
+        token,
+        sessionKey: `agent:${node.agent_work}:${node.agent_work}`,
+        input: context,
+        ...(settingsStore.baseUrl ? { baseUrl: settingsStore.baseUrl } : {}),
+      })
+      setNodeVisualStatus(node.id, nodeType, 'completed')
+      context = output
+    } catch (err: unknown) {
+      setNodeVisualStatus(node.id, nodeType, 'failed')
+      ocStore.messages.push({
+        type: 'user',
+        text: `✗ [${node.label}] 失败：${err instanceof Error ? err.message : String(err)}`,
+        streaming: false,
+      })
+      break
+    } finally {
+      // 确保 sending 状态归位（stream-done 可能已设，再设一次无害）
+      ocStore.sending = false
+      const last = ocStore.messages[ocStore.messages.length - 1]
+      if (last?.streaming) last.streaming = false
+    }
+  }
+
+  running.value = false
 }
 </script>
 
@@ -155,11 +278,7 @@ async function removeFlow(flow_id: string) {
           <div class="text-[17px] font-bold text-[#1f1f2e]">
             <template v-if="showFlowList">Agent Flow 编排</template>
             <template v-else>
-              <input
-                v-model="flowName"
-                class="text-[17px] font-bold text-[#1f1f2e] bg-transparent border-none outline-none w-[220px]"
-                placeholder="工作流名称"
-              />
+              <input v-model="flowName" class="text-[17px] font-bold text-[#1f1f2e] bg-transparent border-none outline-none w-[220px]" placeholder="工作流名称" />
             </template>
           </div>
           <div class="text-[12px] text-[#9b8ec4]">
@@ -167,6 +286,7 @@ async function removeFlow(flow_id: string) {
           </div>
         </div>
       </div>
+
       <div class="flex items-center gap-2">
         <template v-if="showFlowList">
           <button
@@ -180,19 +300,27 @@ async function removeFlow(flow_id: string) {
           </button>
         </template>
         <template v-else>
-          <button
-            class="px-4 py-2 text-[13px] rounded-[8px] border border-[#e8e2f4] text-[#6b5f8a] bg-white hover:bg-[#f5f3ff] cursor-pointer transition"
-            @click="backToList"
-          >
+          <button class="px-4 py-2 text-[13px] rounded-[8px] border border-[#e8e2f4] text-[#6b5f8a] bg-white hover:bg-[#f5f3ff] cursor-pointer transition" @click="backToList">
             返回列表
           </button>
           <button
-            class="flex items-center gap-2 px-4 py-2 text-[13px] font-medium text-white rounded-[10px] cursor-pointer transition bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] shadow-[0_2px_8px_rgba(95,71,206,0.2)] disabled:opacity-50"
-            :disabled="saving"
+            class="flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium rounded-[8px] border border-emerald-300 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 cursor-pointer transition disabled:opacity-50"
+            :disabled="running"
+            @click="runDialogVisible = true"
+          >
+            <svg v-if="running" class="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+            <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+            {{ running ? '执行中...' : '运行' }}
+          </button>
+          <button
+            class="flex items-center gap-1.5 px-4 py-2 text-[13px] font-medium text-white rounded-[10px] cursor-pointer transition bg-[linear-gradient(135deg,#7c5cfc_0%,#5f47ce_100%)] shadow-[0_2px_8px_rgba(95,71,206,0.2)]"
             @click="save"
           >
-            <svg v-if="saving" class="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
-            {{ saving ? '保存中...' : '保存' }}
+            <svg v-if="saveStatus === 'ok'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+            <svg v-else-if="saveStatus === 'err'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+            {{ saveStatus === 'ok' ? '已保存' : saveStatus === 'err' ? '保存失败' : '保存' }}
           </button>
         </template>
       </div>
@@ -203,7 +331,6 @@ async function removeFlow(flow_id: string) {
       <div v-if="flowsStore.loading" class="flex-center h-40">
         <span class="w-7 h-7 border-[2.5px] border-secondary border-t-transparent rounded-full animate-spin" />
       </div>
-
       <div v-else-if="flowsStore.flows.length === 0" class="flex flex-col items-center gap-4 py-16">
         <div class="w-16 h-16 rounded-2xl bg-[#f0ecfa] flex-center">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#9b8ec4" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -212,14 +339,10 @@ async function removeFlow(flow_id: string) {
           </svg>
         </div>
         <p class="text-[14px] text-[#9b8ec4] m-0">还没有工作流</p>
-        <button
-          class="mt-2 px-5 py-2 text-[13px] font-medium rounded-[10px] border border-secondary/30 text-secondary bg-secondary/6 hover:bg-secondary/12 cursor-pointer transition"
-          @click="createNew"
-        >
+        <button class="mt-2 px-5 py-2 text-[13px] font-medium rounded-[10px] border border-secondary/30 text-secondary bg-secondary/6 hover:bg-secondary/12 cursor-pointer transition" @click="createNew">
           创建第一个工作流
         </button>
       </div>
-
       <div v-else class="grid grid-cols-1 gap-3 max-w-[680px]">
         <div
           v-for="flow in flowsStore.flows"
@@ -254,9 +377,7 @@ async function removeFlow(flow_id: string) {
     <div v-else class="flex flex-1 min-h-0">
       <!-- 左侧 Agent 面板 -->
       <div class="w-52 shrink-0 border-r border-[#e8e2f4] bg-white flex flex-col overflow-hidden">
-        <div class="px-4 py-3 text-[11px] font-semibold text-[#9b8ec4] uppercase tracking-wider border-b border-[#f0ecfa]">
-          可用 Agent
-        </div>
+        <div class="px-4 py-3 text-[11px] font-semibold text-[#9b8ec4] uppercase tracking-wider border-b border-[#f0ecfa]">可用 Agent</div>
         <div class="flex-1 overflow-y-auto py-2">
           <div
             v-for="agent in agents"
@@ -264,14 +385,26 @@ async function removeFlow(flow_id: string) {
             class="flex items-center gap-2.5 px-4 py-2.5 cursor-pointer hover:bg-[#f5f3ff] transition group"
             @click="addAgentNode(agent)"
           >
-            <div class="w-7 h-7 rounded-[7px] bg-[linear-gradient(135deg,#f0ecfa_0%,#e4dcf7_100%)] flex-center shrink-0">
+            <div class="w-7 h-7 rounded-[7px] bg-[linear-gradient(135deg,#f0ecfa_0%,#e4dcf7_100%)] flex-center shrink-0 relative">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7c5cfc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
               </svg>
+              <!-- 执行状态小点 -->
+              <span
+                v-if="editingFlow?.nodes.find(n => n.agent_work === agent.name)"
+                class="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full border border-white"
+                :class="{
+                  'bg-blue-400': Object.entries(nodeStatuses).find(([id]) => editingFlow?.nodes.find(n => n.id === id && n.agent_work === agent.name))?.[1] === 'running',
+                  'bg-emerald-400': Object.entries(nodeStatuses).find(([id]) => editingFlow?.nodes.find(n => n.id === id && n.agent_work === agent.name))?.[1] === 'completed',
+                  'bg-red-400': Object.entries(nodeStatuses).find(([id]) => editingFlow?.nodes.find(n => n.id === id && n.agent_work === agent.name))?.[1] === 'failed',
+                  'bg-[#c4bdd8]': !Object.entries(nodeStatuses).find(([id]) => editingFlow?.nodes.find(n => n.id === id && n.agent_work === agent.name)),
+                }"
+              />
             </div>
             <span class="text-[12px] text-[#3d3558] truncate">{{ agent.name }}</span>
-            <svg class="ml-auto text-[#c4bdd8] opacity-0 group-hover:opacity-100 transition shrink-0" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+            <svg class="ml-auto text-[#c4bdd8] opacity-0 group-hover:opacity-100 transition shrink-0" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
           </div>
           <div v-if="agents.length === 0" class="px-4 py-3 text-[11px] text-[#b8b0cc]">
             暂无 Agent，请先在「智能体」页面创建
@@ -293,4 +426,67 @@ async function removeFlow(flow_id: string) {
       </div>
     </div>
   </div>
+
+  <!-- 运行对话框 -->
+  <Teleport to="body">
+    <Transition name="overlay">
+      <div v-if="runDialogVisible" class="fixed inset-0 z-[9999] flex items-center justify-center" @click.self="runDialogVisible = false">
+        <div class="absolute inset-0 bg-black/30 backdrop-blur-sm" />
+        <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-[480px] mx-4 overflow-hidden">
+          <div class="flex items-center gap-3 px-6 pt-6 pb-4 border-b border-[#f0ecfa]">
+            <div class="w-8 h-8 rounded-[9px] bg-emerald-100 flex-center shrink-0">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3" /></svg>
+            </div>
+            <div>
+              <div class="text-[15px] font-bold text-[#1f1f2e]">运行工作流</div>
+              <div class="text-[11px] text-[#9b8ec4] mt-0.5">结果将在 OpenClaw 对话中展示</div>
+            </div>
+          </div>
+
+          <div class="px-6 py-5 flex flex-col gap-4">
+            <!-- 执行顺序预览 -->
+            <div>
+              <div class="text-[11px] font-medium text-[#9b8ec4] mb-2">执行顺序</div>
+              <div class="flex flex-wrap gap-1.5 items-center">
+                <template v-for="(node, i) in (editingFlow ? getExecutionOrder(editingFlow) : [])" :key="node.id">
+                  <span class="px-2.5 py-1 text-[11px] rounded-full bg-[#f0ecfa] text-[#5f47ce] border border-[#e4dcf7]">{{ node.label }}</span>
+                  <svg v-if="i < getExecutionOrder(editingFlow!).length - 1" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#c4bdd8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
+                </template>
+                <span v-if="getExecutionOrder(editingFlow!).length === 0" class="text-[11px] text-[#b8b0cc]">没有 Agent 节点，请先添加</span>
+              </div>
+            </div>
+
+            <!-- 初始任务输入 -->
+            <div>
+              <label class="text-[12px] font-medium text-[#6b5f8a] block mb-1.5">初始任务描述</label>
+              <textarea
+                v-model="initialTask"
+                rows="4"
+                class="block w-full box-border px-4 py-3 text-[13px] border border-[#e8e2f4] rounded-xl outline-none focus:border-secondary focus:shadow-[0_0_0_3px_rgba(95,71,206,0.08)] resize-none"
+                placeholder="描述你希望 Agent 完成的任务..."
+                @keydown.meta.enter="startRun"
+              />
+            </div>
+          </div>
+
+          <div class="flex gap-3 justify-end px-6 py-4 bg-[#faf9ff] border-t border-[#f0ecfa]">
+            <button class="px-4 py-2 text-[13px] rounded-[8px] border border-[#e8e2f4] text-[#6b5f8a] bg-white hover:bg-[#f5f3ff] cursor-pointer transition" @click="runDialogVisible = false">取消</button>
+            <button
+              class="px-5 py-2 text-[13px] font-medium text-white rounded-[8px] cursor-pointer transition bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              :disabled="!initialTask.trim() || getExecutionOrder(editingFlow!).length === 0"
+              @click="startRun"
+            >开始执行</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 </template>
+
+<style scoped>
+.overlay-enter-active, .overlay-leave-active { transition: opacity 0.15s ease; }
+.overlay-enter-active > div:last-child, .overlay-leave-active > div:last-child { transition: transform 0.15s ease, opacity 0.15s ease; }
+.overlay-enter-from, .overlay-leave-to { opacity: 0; }
+.overlay-enter-from > div:last-child { transform: scale(0.97) translateY(8px); opacity: 0; }
+.overlay-leave-to > div:last-child { transform: scale(0.97) translateY(8px); opacity: 0; }
+</style>

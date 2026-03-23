@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 // ─── 数据模型 ──────────────────────────────────────────────────────────────
 
@@ -338,4 +338,89 @@ pub fn finish_flow_execution(
         exec.finished_at = Some(now_ts());
     }
     Ok(())
+}
+
+// ─── 运行节点（独立 HTTP 调用，不复用主界面事件） ─────────────────────────
+
+/// 调用 /v1/responses，流式结果通过 flow-stream-chunk 事件推送，完成后返回完整输出文本。
+#[tauri::command]
+pub async fn run_flow_node(
+    app: AppHandle,
+    base_url: Option<String>,
+    token: String,
+    session_key: String,
+    input: String,
+) -> Result<String, String> {
+    use futures_util::StreamExt;
+
+    let base = base_url.unwrap_or_else(|| "http://127.0.0.1:18789".to_string());
+    let url = format!("{}/v1/responses", base.trim_end_matches('/'));
+
+    let body = serde_json::json!({
+        "input": input,
+        "stream": true,
+    });
+
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token.trim()))
+        .header("x-openclaw-session-key", &session_key)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let err = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, err));
+    }
+
+    let mut full_text = String::new();
+    let mut byte_buf = Vec::<u8>::new();
+    let mut current_event_type = String::new();
+    let mut byte_stream = response.bytes_stream();
+
+    while let Some(chunk) = byte_stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        byte_buf.extend_from_slice(&chunk);
+
+        while let Some(pos) = byte_buf.iter().position(|&b| b == b'\n') {
+            let raw = byte_buf.drain(..=pos).collect::<Vec<_>>();
+            let line = String::from_utf8_lossy(&raw).trim_end_matches('\r').trim().to_string();
+
+            if line.is_empty() {
+                current_event_type.clear();
+            } else if let Some(ev) = line.strip_prefix("event:") {
+                current_event_type = ev.trim().to_string();
+            } else if let Some(data) = line.strip_prefix("data:") {
+                let data = data.trim();
+                if data.is_empty() || data == "[DONE]" { continue; }
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                    // 取 delta 字段
+                    let text = v.get("delta").and_then(|d| d.as_str())
+                        .or_else(|| v.get("text").and_then(|t| t.as_str()))
+                        .or_else(|| {
+                            v.get("choices")?.as_array()?.first()?
+                             .get("delta")?.get("content")?.as_str()
+                        })
+                        .unwrap_or("")
+                        .to_string();
+                    if !text.is_empty() {
+                        full_text.push_str(&text);
+                        let _ = app.emit("stream-item", serde_json::json!({ "type": "thought", "text": text }));
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = app.emit("stream-done", serde_json::Value::Null);
+    Ok(full_text)
 }
